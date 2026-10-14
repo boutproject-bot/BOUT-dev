@@ -992,6 +992,16 @@ public:
   /// @returns A @ref Parallel struct containing all assembled operators.
   Parallel getParallel() const;
 
+  class Cache {
+  public:
+    static std::shared_ptr<PetscOperators> get(Mesh* mesh);
+    static std::shared_ptr<PetscOperators::Parallel> getParallel(Mesh* mesh);
+
+  private:
+    static std::map<Mesh*, std::weak_ptr<PetscOperators>> petscOp;
+    static std::map<Mesh*, std::weak_ptr<PetscOperators::Parallel>> parOp;
+  };
+
 private:
   mutable std::optional<PetscForwardOperator> cache_forward;
   mutable std::optional<PetscBackwardOperator> cache_backward;
