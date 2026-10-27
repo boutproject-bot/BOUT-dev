@@ -474,6 +474,20 @@ private:
   UniqueVec vec;                                    ///< Underlying PETSc Vec (owned).
 };
 
+inline void printMatSize(Mat Div, const std::string& name) {
+  PetscInt M, N;
+  BOUT_DO_PETSC(MatGetSize(Div, &M, &N));
+  PetscInt m, n;
+  BOUT_DO_PETSC(MatGetLocalSize(Div, &m, &n));
+  output.write("\nMatrix {} is size {} x {} (local {} x {})\n", name, M, N, m, n);
+}
+
+inline void printMatSize(const std::shared_ptr<const PetscIndexMapping>& map,
+                         const std::string& name) {
+  output.write("\nMapping {} is size {} (local {})\n", name, map->globalSize(),
+               map->localSize());
+}
+
 // Tagged vector aliases — these provide compile-time checks of compatible operations.
 /// @brief PETSc vector in the cell space C.
 using PetscCellVector = PetscSpaceVector<CellSpaceTag>;
@@ -725,6 +739,9 @@ private:
     BOUT_DO_PETSC(MatSetType(*temp, MATMPIAIJ));
     BOUT_DO_PETSC(MatSetSizes(*temp, out_mapping->localSize(), in_mapping->localSize(),
                               out_mapping->globalSize(), in_mapping->globalSize()));
+    printMatSize(*temp, "ASSEMBLE from CSR");
+    printMatSize(in_mapping, "in from CSR");
+    printMatSize(out_mapping, "out from CSR");
 
     PetscInt col_start{0};
     PetscInt col_end{0};
@@ -772,6 +789,8 @@ private:
     BOUT_DO_PETSC(MatAssemblyBegin(*temp, MAT_FINAL_ASSEMBLY));
     BOUT_DO_PETSC(MatAssemblyEnd(*temp, MAT_FINAL_ASSEMBLY));
 
+    printMatSize(*temp, "TEMP");
+    printMatSize(in_mapping->getPetscToStored(), "in_mapping");
     // Post-multiply by the stored→PETSc permutation to convert column numbering.
     UniqueMat out{new Mat{nullptr}};
     BOUT_DO_PETSC(MatMatMult(*temp, in_mapping->getPetscToStored(), MAT_INITIAL_MATRIX,
