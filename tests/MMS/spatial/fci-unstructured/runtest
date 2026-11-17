@@ -38,9 +38,13 @@ OPERATORS = (
     "FV_div_par_mod",
     "FV_div_par_fvv",
     "FV_div_a_grad_perp",
+    "FV_div_a_grad_perp_flowZ",
+    "FV_div_a_grad_perp_upwind",
 )
 
 # As in ../fci; div_par_fvv is first order
+# (The upwinded perpendicular operator uses a second-order upwind
+# reconstruction, so it is expected at order 2.)
 operator_order = {
     "FV_div_par_fvv": 1,
 }

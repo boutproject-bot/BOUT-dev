@@ -73,8 +73,12 @@ int main(int argc, char** argv) {
     // In its own scope so that the PETSc objects are released before
     // BoutFinalise
     const auto dagp = FV::Div_a_Grad_perp_FCI::create(mesh, 1.0);
-    const Field3D dagp_result = (*dagp)(K, input, false);
+    Field3D flow_R;
+    Field3D flow_Z;
+    const Field3D dagp_result = (*dagp)(K, input, flow_R, flow_Z, false);
     fci_op_test("FV_div_a_grad_perp", dump, input, dagp_result);
+    fci_op_test("FV_div_a_grad_perp_flowZ", dump, input, flow_Z);
+    fci_op_test("FV_div_a_grad_perp_upwind", dump, input, (*dagp)(K, input, true));
 
     // Conservation: every plane is closed (periodic in Z, zero-flux walls in
     // R), so the volume integral vanishes

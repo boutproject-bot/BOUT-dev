@@ -23,6 +23,7 @@
 #include <map>
 #include <math.h>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -849,6 +850,17 @@ struct Div_a_Grad_perp_FCI_unstructured::Impl {
   PetscCellToFacePointOperator grad;
   PetscCellToFacePointOperator value;
   PetscFacePointToCellOperator div;
+  /// Optional (grids written by zoidberg.unstructured): the nodes on either
+  /// side of each face point, for upwinding
+  std::optional<PetscCellToFacePointOperator> left;
+  std::optional<PetscCellToFacePointOperator> right;
+  /// Optional: cell average of the flux vector -a grad f (R and Z components)
+  std::optional<PetscFacePointToCellOperator> flowR;
+  std::optional<PetscFacePointToCellOperator> flowZ;
+  BoutReal rho_s0;
+
+  Field3D apply(const Field3D& a, const Field3D& f, bool upwinding, Field3D* flow_R,
+                Field3D* flow_Z) const;
 };
 
 namespace {
@@ -955,22 +967,97 @@ Div_a_Grad_perp_FCI_unstructured::Div_a_Grad_perp_FCI_unstructured(Mesh* mesh,
       ops, PetscCellToFacePointOperator(faces, cells, grad_rows, grad_cols, grad_weights),
       PetscCellToFacePointOperator(faces, cells, value_rows, value_cols, value_weights),
       PetscFacePointToCellOperator(cells, faces, div_rows, div_cols, div_weights)
-          * SQ(rho_s0)});
+          * SQ(rho_s0),
+      std::nullopt, std::nullopt, std::nullopt, std::nullopt, rho_s0});
+
+  if (mesh->sourceHasVar("dagp_us_left_rows")) {
+    auto [l_rows, l_cols, l_weights] = read("dagp_us_left", n_cells);
+    auto [r_rows, r_cols, r_weights] = read("dagp_us_right", n_cells);
+    impl->left.emplace(faces, cells, l_rows, l_cols, l_weights);
+    impl->right.emplace(faces, cells, r_rows, r_cols, r_weights);
+  }
+  if (mesh->sourceHasVar("dagp_us_flowR_rows")) {
+    auto [fr_rows, fr_cols, fr_weights] = read("dagp_us_flowR", n_facepoints);
+    auto [fz_rows, fz_cols, fz_weights] = read("dagp_us_flowZ", n_facepoints);
+    // Flux vector in normalised units: one length scale (rho_s0) fewer
+    // than the divergence
+    impl->flowR.emplace(
+        PetscFacePointToCellOperator(cells, faces, fr_rows, fr_cols, fr_weights)
+        * rho_s0);
+    impl->flowZ.emplace(
+        PetscFacePointToCellOperator(cells, faces, fz_rows, fz_cols, fz_weights)
+        * rho_s0);
+  }
+}
+
+Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Field3D& f,
+                                                      bool upwinding, Field3D* flow_R,
+                                                      Field3D* flow_Z) const {
+  ASSERT1_FIELDS_COMPATIBLE(a, f);
+  const auto& cells = ops->cellMapping();
+  const auto a_cells = packCells(cells, a);
+  const auto f_cells = packCells(cells, f);
+  const auto grad_face = grad(f_cells);
+
+  PetscFacePointVector a_face;
+  if (upwinding) {
+    if (not(left and right)) {
+      throw BoutException("Upwinding on unstructured meshes needs dagp_us_left/right "
+                          "in the grid file (regenerate with zoidberg.unstructured)");
+    }
+    // As in the structured operator, take a from the side with the larger f
+    // (where the diffusive flux comes from). The face gradient S.grad f is
+    // positive if f increases towards the right node. The value is a
+    // second-order upwind reconstruction a_side + (x_f - x_side).grad a.
+    a_face = (*left)(a_cells);
+    const auto a_right = (*right)(a_cells);
+    PetscScalar* av{nullptr};
+    const PetscScalar* ar{nullptr};
+    const PetscScalar* gf{nullptr};
+    BOUT_DO_PETSC(VecGetArray(a_face.raw(), &av));
+    BOUT_DO_PETSC(VecGetArrayRead(a_right.raw(), &ar));
+    BOUT_DO_PETSC(VecGetArrayRead(grad_face.raw(), &gf));
+    PetscInt n_local{0};
+    BOUT_DO_PETSC(VecGetLocalSize(a_face.raw(), &n_local));
+    for (PetscInt i = 0; i < n_local; ++i) {
+      if (gf[i] > 0) {
+        av[i] = ar[i];
+      }
+    }
+    BOUT_DO_PETSC(VecRestoreArray(a_face.raw(), &av));
+    BOUT_DO_PETSC(VecRestoreArrayRead(a_right.raw(), &ar));
+    BOUT_DO_PETSC(VecRestoreArrayRead(grad_face.raw(), &gf));
+  } else {
+    a_face = value(a_cells);
+  }
+  const auto flux = PetscFacePointVector::pointwiseMultiply(a_face, grad_face);
+
+  if (flow_R != nullptr) {
+    if (flowR and flowZ) {
+      *flow_R = unpackCells((*flowR)(flux), f);
+      *flow_Z = unpackCells((*flowZ)(flux), f);
+    } else {
+      *flow_R = zeroFrom(f);
+      *flow_Z = zeroFrom(f);
+    }
+    flow_R->setRegion("RGN_NOBNDRY");
+    flow_Z->setRegion("RGN_NOBNDRY");
+  }
+  auto result = unpackCells(div(flux), f);
+  result.setRegion("RGN_NOBNDRY");
+  return result;
 }
 
 Field3D Div_a_Grad_perp_FCI_unstructured::operator()(const Field3D& a, const Field3D& f,
                                                      bool upwinding) const {
-  if (upwinding) {
-    throw BoutException("Upwinding is not supported on unstructured meshes");
-  }
-  ASSERT1_FIELDS_COMPATIBLE(a, f);
-  const auto& cells = impl->ops->cellMapping();
-  const auto a_face = impl->value(packCells(cells, a));
-  const auto grad_face = impl->grad(packCells(cells, f));
-  auto result = unpackCells(
-      impl->div(PetscFacePointVector::pointwiseMultiply(a_face, grad_face)), f);
-  result.setRegion("RGN_NOBNDRY");
-  return result;
+  return impl->apply(a, f, upwinding, nullptr, nullptr);
+}
+
+Field3D Div_a_Grad_perp_FCI_unstructured::operator()(const Field3D& a, const Field3D& f,
+                                                     Field3D& flow_xlow,
+                                                     Field3D& flow_zlow,
+                                                     bool upwinding) const {
+  return impl->apply(a, f, upwinding, &flow_xlow, &flow_zlow);
 }
 #else
 Div_a_Grad_perp_FCI_unstructured::Div_a_Grad_perp_FCI_unstructured(
@@ -984,15 +1071,13 @@ Div_a_Grad_perp_FCI_unstructured::operator()([[maybe_unused]] const Field3D& a,
                                              [[maybe_unused]] bool upwinding) const {
   throw BoutException("Compile BOUT++ with PETSc to run on unstructured meshes!");
 }
-#endif
 
-Field3D Div_a_Grad_perp_FCI_unstructured::operator()(const Field3D& a, const Field3D& f,
-                                                     Field3D& flow_xlow,
-                                                     Field3D& flow_zlow,
-                                                     bool upwinding) const {
-  flow_xlow = zeroFrom(f);
-  flow_zlow = zeroFrom(f);
-  return (*this)(a, f, upwinding);
+Field3D Div_a_Grad_perp_FCI_unstructured::operator()(
+    [[maybe_unused]] const Field3D& a, [[maybe_unused]] const Field3D& f,
+    [[maybe_unused]] Field3D& flow_xlow, [[maybe_unused]] Field3D& flow_zlow,
+    [[maybe_unused]] bool upwinding) const {
+  throw BoutException("Compile BOUT++ with PETSc to run on unstructured meshes!");
 }
+#endif
 
 } // Namespace FV

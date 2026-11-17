@@ -82,6 +82,9 @@ for name, expr in (
     ("FV_div_par_mod_solution", FCI_div_par(f * K)),
     ("FV_div_par_fvv_solution", FCI_div_par(f * K * K)),
     ("FV_div_a_grad_perp_solution", div_a_grad_pol(K, f)),
+    ("FV_div_a_grad_perp_upwind_solution", div_a_grad_pol(K, f)),
+    # Z component of the flux vector -K grad_pol f returned as flow_zlow
+    ("FV_div_a_grad_perp_flowZ_solution", -K * diff(f, z) * 2.0 * pi / Lz),
 ):
     expr_str = exprToStr(expr.subs({x: xu, z: zu}, simultaneous=True))
     print(f"{name} = {expr_str}")
