@@ -344,6 +344,24 @@ int Mesh::get(Vector3D& var, const std::string& name, BoutReal def, bool communi
 
 bool Mesh::isDataSourceGridFile() const { return source != nullptr and source->is_file; }
 
+bool Mesh::isUnstructured() {
+  if (sourceHasVar("unstructured")) {
+    int unstructured{0};
+    get(unstructured, "unstructured", 0);
+    return unstructured != 0;
+  }
+  if (sourceHasVar("dagp_us_div_weights")) {
+    static bool warned{false};
+    if (not warned) {
+      output_warn.write("Grid has 'dagp_us_*' arrays but no 'unstructured' flag; "
+                        "treating it as an unstructured mesh\n");
+      warned = true;
+    }
+    return true;
+  }
+  return false;
+}
+
 bool Mesh::sourceHasVar(const std::string& name) {
   TRACE("Mesh::sourceHasVar({:s})", name);
   if (source == nullptr) {

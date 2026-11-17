@@ -252,6 +252,14 @@ public:
   /// Wrapper for GridDataSource::hasVar
   bool sourceHasVar(const std::string& name);
 
+  /// Is this an unstructured FCI mesh?
+  ///
+  /// Unstructured meshes store the nodes of each poloidal plane along x,
+  /// with nz = 1 (see zoidberg.unstructured). They are marked by the grid
+  /// integer `unstructured`. Older work-in-progress grids that only contain
+  /// the `dagp_us_*` arrays are also treated as unstructured (with a warning).
+  bool isUnstructured();
+
   /// Wrapper for GridDataSource::hasXBoundaryGuards
   bool sourceHasXBoundaryGuards();
 
