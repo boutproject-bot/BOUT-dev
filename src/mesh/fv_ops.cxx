@@ -27,6 +27,10 @@
 #include <math.h>
 #include <memory>
 
+#if !BOUT_HAS_PETSC
+using PetscInt = int;
+#endif
+
 namespace {
 template <class T>
 struct Slices {
@@ -986,8 +990,6 @@ Field3D FieldFromVec(Vec vec, const Field3D& ref) {
   BOUT_DO_PETSC(VecRestoreArrayRead(vec, &ptr));
   return ret;
 }
-#else
-int* assembleParallelMatrix(Mesh* mesh, const std::string& name) {}
 #endif
 } // namespace
 
