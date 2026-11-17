@@ -79,13 +79,33 @@ FCIMap::FCIMap(Mesh& mesh, [[maybe_unused]] const Coordinates::FieldMetric& dy,
         "FCIMap called with offset = 0; You probably didn't mean to do that");
   }
 
+  // Unstructured meshes store the nodes of each poloidal plane along x
+  // (nz = 1), so x/z index neighbours are not geometric neighbours. Only
+  // the precomputed interpolation works there, corners are not defined, and
+  // boundary intersections cannot be extrapolated in index space.
+  const bool unstructured = map_mesh->isUnstructured();
+
   auto& interpolation_options = options["xzinterpolation"];
+  if (unstructured) {
+    const auto type = interpolation_options["type"].withDefault<std::string>("");
+    if (type != "precomputed") {
+      throw BoutException("Unstructured meshes require "
+                          "mesh:paralleltransform:xzinterpolation:type = precomputed "
+                          "(got '{}')",
+                          type);
+    }
+    if (std::abs(offset_) != 1) {
+      throw BoutException("Unstructured meshes only support MYG = 1");
+    }
+  }
   interp = XZInterpolationFactory::getInstance().create(&interpolation_options, map_mesh);
   interp->setYOffset(offset_);
 
-  interp_corner =
-      XZInterpolationFactory::getInstance().create(&interpolation_options, map_mesh);
-  interp_corner->setYOffset(offset_);
+  if (not unstructured) {
+    interp_corner =
+        XZInterpolationFactory::getInstance().create(&interpolation_options, map_mesh);
+    interp_corner->setYOffset(offset_);
+  }
 
   // Index-space coordinates of forward/backward points
   Field3D xt_prime{map_mesh};
@@ -129,44 +149,9 @@ FCIMap::FCIMap(Mesh& mesh, [[maybe_unused]] const Coordinates::FieldMetric& dy,
                         parallelSliceFieldName("Z", offset));
   }
 
-  // Cell corners
-  Field3D xt_prime_corner{emptyFrom(xt_prime)};
-  Field3D zt_prime_corner{emptyFrom(zt_prime)};
+  if (not unstructured) {
+    calcCornerWeights(xt_prime, zt_prime);
 
-  BOUT_FOR(i, xt_prime_corner.getRegion("RGN_NOBNDRY")) {
-    // Point interpolated from (x+1/2, z+1/2)
-
-    // Cache the offsets
-    auto i_xplus = i.xp();
-    auto i_zplus = i.zp();
-    auto i_xzplus = i_zplus.xp();
-
-    if ((xt_prime[i] < 0.0) || (xt_prime[i_xplus] < 0.0) || (xt_prime[i_xzplus] < 0.0)
-        || (xt_prime[i_zplus] < 0.0)) {
-      // Hit a boundary
-      corner_boundary_mask(i.x(), i.y(), i.z()) = true;
-
-      xt_prime_corner[i] = -1.0;
-      zt_prime_corner[i] = -1.0;
-    } else {
-      xt_prime_corner[i] =
-          0.25
-          * (xt_prime[i] + xt_prime[i_xplus] + xt_prime[i_zplus] + xt_prime[i_xzplus]);
-
-      zt_prime_corner[i] =
-          0.25
-          * (zt_prime[i] + zt_prime[i_xplus] + zt_prime[i_zplus] + zt_prime[i_xzplus]);
-    }
-  }
-
-  interp_corner->setMask(corner_boundary_mask);
-
-  {
-    TRACE("FCImap: calculating corner weights");
-    interp_corner->calcWeights(xt_prime_corner, zt_prime_corner);
-  }
-
-  {
     TRACE("FCImap: calculating weights");
     interp->calcWeights(xt_prime, zt_prime);
   }
@@ -201,14 +186,26 @@ FCIMap::FCIMap(Mesh& mesh, [[maybe_unused]] const Coordinates::FieldMetric& dy,
     const auto y = i.y();
     const auto z = i.z();
 
+    to_remove(x, y, z) = true;
+
+    auto boundary = (xt_prime[i] < map_mesh->xstart) ? inner_boundary : outer_boundary;
+
+    if (unstructured) {
+      // The intersection cannot be extrapolated in index space; use the
+      // position of the node itself.
+      if (!boundary->contains(x, y, z)) {
+        boundary->add_point(x, y, z, x, y + offset - (std::copysign(0.5, offset)), z,
+                            std::abs(offset) - 0.5, defValid, offset);
+      }
+      continue;
+    }
+
     //----------------------------------------
     // Boundary stuff
     //
     // If a field line leaves the domain, then the forward or backward
     // indices (forward/backward_xt_prime and forward/backward_zt_prime)
     // are set to -1
-
-    to_remove(x, y, z) = true;
 
     // Need to specify the index of the boundary intersection, but
     // this may not be defined in general.
@@ -246,7 +243,6 @@ FCIMap::FCIMap(Mesh& mesh, [[maybe_unused]] const Coordinates::FieldMetric& dy,
     // that also means inner. So to differentiate between inner and outer we
     // need at least 2 points in the domain.
     ASSERT2(map_mesh->xend - map_mesh->xstart >= 2);
-    auto boundary = (xt_prime[i] < map_mesh->xstart) ? inner_boundary : outer_boundary;
     if (!boundary->contains(x, y, z)) {
       boundary->add_point(x, y, z, x + dx, y + offset - (std::copysign(0.5, offset)),
                           z + dz, // Intersection point in local index space
@@ -259,8 +255,50 @@ FCIMap::FCIMap(Mesh& mesh, [[maybe_unused]] const Coordinates::FieldMetric& dy,
   interp->setRegion(region_no_boundary);
 }
 
+void FCIMap::calcCornerWeights(const Field3D& xt_prime, const Field3D& zt_prime) {
+  // Cell corners
+  Field3D xt_prime_corner{emptyFrom(xt_prime)};
+  Field3D zt_prime_corner{emptyFrom(zt_prime)};
+
+  BOUT_FOR(i, xt_prime_corner.getRegion("RGN_NOBNDRY")) {
+    // Point interpolated from (x+1/2, z+1/2)
+
+    // Cache the offsets
+    auto i_xplus = i.xp();
+    auto i_zplus = i.zp();
+    auto i_xzplus = i_zplus.xp();
+
+    if ((xt_prime[i] < 0.0) || (xt_prime[i_xplus] < 0.0) || (xt_prime[i_xzplus] < 0.0)
+        || (xt_prime[i_zplus] < 0.0)) {
+      // Hit a boundary
+      corner_boundary_mask(i.x(), i.y(), i.z()) = true;
+
+      xt_prime_corner[i] = -1.0;
+      zt_prime_corner[i] = -1.0;
+    } else {
+      xt_prime_corner[i] =
+          0.25
+          * (xt_prime[i] + xt_prime[i_xplus] + xt_prime[i_zplus] + xt_prime[i_xzplus]);
+
+      zt_prime_corner[i] =
+          0.25
+          * (zt_prime[i] + zt_prime[i_xplus] + zt_prime[i_zplus] + zt_prime[i_xzplus]);
+    }
+  }
+
+  interp_corner->setMask(corner_boundary_mask);
+
+  {
+    TRACE("FCImap: calculating corner weights");
+    interp_corner->calcWeights(xt_prime_corner, zt_prime_corner);
+  }
+}
+
 Field3D FCIMap::integrate(Field3D& f) const {
 
+  if (interp_corner == nullptr) {
+    throw BoutException("FCIMap::integrate is not supported on unstructured meshes");
+  }
   ASSERT1(f.getDirectionY() == YDirectionType::Standard);
   ASSERT1(map_mesh == f.getMesh());
 
