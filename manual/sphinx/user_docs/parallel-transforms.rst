@@ -252,6 +252,14 @@ In brief:
   poloidal plane). It does not support upwinding, and the flow
   diagnostics are returned as zero.
 
+- Perpendicular Dirichlet walls: grids generated with
+  ``dirichlet_walls=True`` store the wall nodes in the x guard cells
+  (``MXG`` = number of wall nodes per side). They are not evolved; set them
+  with the ``dirichlet_node`` boundary condition, which evaluates the value
+  at each guard cell (``dirichlet`` would place the boundary half way to the
+  neighbouring x index, which is not a geometric neighbour here). With
+  ``NXPE > 1`` every processor needs at least ``MXG`` evolving nodes.
+
 Because x and z are index coordinates, input expressions should use the
 grid geometry instead, for example
 

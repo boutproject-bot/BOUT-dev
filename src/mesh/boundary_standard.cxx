@@ -226,6 +226,70 @@ void BoundaryDirichlet_O1::apply(Field3D& f, BoutReal t) {
   }
 }
 
+BoundaryOp* BoundaryDirichletNode::clone(BoundaryRegion* region,
+                                         const std::list<std::string>& args) {
+  std::shared_ptr<FieldGenerator> newgen;
+  if (!args.empty()) {
+    // First argument should be an expression
+    newgen = FieldFactory::get()->parse(args.front());
+  }
+  return new BoundaryDirichletNode(region, newgen);
+}
+
+void BoundaryDirichletNode::apply(Field2D& f, BoutReal t) {
+  Mesh* mesh = bndry->localmesh;
+  ASSERT1(mesh == f.getMesh());
+  if (f.getLocation() != CELL_CENTRE) {
+    throw BoutException("dirichlet_node BC is not implemented for staggered grids.");
+  }
+  std::shared_ptr<FieldGenerator> fg = gen ? gen : f.getBndryGenerator(bndry->location);
+  for (bndry->first(); !bndry->isDone(); bndry->next1d()) {
+    for (int i = 0; i < bndry->width; i++) {
+      const int xi = bndry->x + (i * bndry->bx);
+      const int yi = bndry->y + (i * bndry->by);
+      f(xi, yi) = fg ? fg->generate(Context(xi, yi, 0, CELL_CENTRE, mesh, t)) : 0.0;
+    }
+  }
+}
+
+void BoundaryDirichletNode::apply(Field3D& f, BoutReal t) {
+  Mesh* mesh = bndry->localmesh;
+  ASSERT1(mesh == f.getMesh());
+  if (f.getLocation() != CELL_CENTRE) {
+    throw BoutException("dirichlet_node BC is not implemented for staggered grids.");
+  }
+  std::shared_ptr<FieldGenerator> fg = gen ? gen : f.getBndryGenerator(bndry->location);
+  for (bndry->first(); !bndry->isDone(); bndry->next1d()) {
+    for (int i = 0; i < bndry->width; i++) {
+      // Each boundary cell gets the value at its own position
+      const int xi = bndry->x + (i * bndry->bx);
+      const int yi = bndry->y + (i * bndry->by);
+      for (int zk = mesh->zstart; zk <= mesh->zend; zk++) {
+        f(xi, yi, zk) =
+            fg ? fg->generate(Context(xi, yi, zk, CELL_CENTRE, mesh, t)) : 0.0;
+      }
+    }
+  }
+}
+
+void BoundaryDirichletNode::apply_ddt(Field2D& f) {
+  Field2D* dt = f.timeDeriv();
+  for (bndry->first(); !bndry->isDone(); bndry->next()) {
+    (*dt)(bndry->x, bndry->y) = 0.;
+  }
+}
+
+void BoundaryDirichletNode::apply_ddt(Field3D& f) {
+  const Mesh* mesh = bndry->localmesh;
+  ASSERT1(mesh == f.getMesh());
+  Field3D* dt = f.timeDeriv();
+  for (bndry->first(); !bndry->isDone(); bndry->next()) {
+    for (int z = mesh->zstart; z <= mesh->zend; z++) {
+      (*dt)(bndry->x, bndry->y, z) = 0.;
+    }
+  }
+}
+
 void BoundaryDirichlet_O1::apply_ddt(Field2D& f) {
   Field2D* dt = f.timeDeriv();
   for (bndry->first(); !bndry->isDone(); bndry->next()) {
