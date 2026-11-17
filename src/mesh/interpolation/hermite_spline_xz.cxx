@@ -536,11 +536,11 @@ Field3D XZHermiteSplineBase<monotonic, imp_type>::interpolate(
 #if BOUT_HAS_PETSC
 PrecomputedInterpolation::PrecomputedInterpolation(int y_offset, Mesh* mesh,
                                                    [[maybe_unused]] Options* options)
-    : XZInterpolation(y_offset, mesh), op(mesh) {}
+    : XZInterpolation(y_offset, mesh), op(PetscOperators::Cache::get(localmesh)) {}
 #else
-PrecomputedInterpolation::PrecomputedInterpolation([[maybe_unused]] int y_offset,
-                                                   [[maybe_unused]] Mesh* mesh,
-                                                   [[maybe_unused]] Options* options) {
+PrecomputedInterpolation::PrecomputedInterpolation(int y_offset, Mesh* mesh,
+                                                   [[maybe_unused]] Options* options)
+    : XZInterpolation(y_offset, mesh) {
   throw BoutException("PrecomputedInterpolation requires PETSc");
 }
 #endif
@@ -549,18 +549,29 @@ Field3D
 PrecomputedInterpolation::interpolate(const Field3D& fin,
                                       [[maybe_unused]] const std::string& region) const {
 #if BOUT_HAS_PETSC
+  if (y_offset != 1 and y_offset != -1) {
+    throw BoutException("PrecomputedInterpolation: offset {} not supported", y_offset);
+  }
+  // The operators also read the parallel boundary (virtual) cells of the
+  // input. Interior legs never use them, so set them to zero rather than
+  // leaving them uninitialised.
   Field3D f = fin;
   f.splitParallelSlices();
-  f.yup().allocate();
-  f.ydown().allocate();
-  if (y_offset == 1) {
-    return op.computeYup(f);
+  f.yup() = 0.0;
+  f.ydown() = 0.0;
+  Field3D result = (y_offset == 1) ? op->computeYup(f) : op->computeYdown(f);
+  // Points whose field line leaves the domain have no interior leg and are
+  // marked NaN. They are parallel boundary points, which FCIMap excludes
+  // and boundary conditions set; use 0 so that nothing propagates NaNs.
+  BOUT_FOR(i, result.getRegion("RGN_ALL")) {
+    if (not std::isfinite(result[i])) {
+      result[i] = 0.0;
+    }
   }
-  if (y_offset == -1) {
-    return op.computeYdown(f);
-  }
+  return result;
+#else
+  throw BoutException("PrecomputedInterpolation requires PETSc");
 #endif
-  throw BoutException("Offset {} not supported", y_offset);
 }
 
 template <bool monotonic, bout::details::implementation_type imp_type>

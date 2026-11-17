@@ -572,7 +572,8 @@ Field3D PetscOperators::computeYup(const Field3D& f) const {
   const PetscScalar* leg_x{nullptr};
   BOUT_DO_PETSC(VecGetArrayRead(leg.raw(), &leg_x));
 
-  Field3D result{emptyFrom(f)};
+  // Zero, so that only points without an interior leg are invalid (NaN)
+  Field3D result{zeroFrom(f)};
 
   const PetscInt leg_row_start = forward_leg_mapping->rowStart();
 
@@ -607,7 +608,8 @@ Field3D PetscOperators::computeYdown(const Field3D& f) const {
   const PetscScalar* leg_x{nullptr};
   BOUT_DO_PETSC(VecGetArrayRead(leg.raw(), &leg_x));
 
-  Field3D result{emptyFrom(f)};
+  // Zero, so that only points without an interior leg are invalid (NaN)
+  Field3D result{zeroFrom(f)};
 
   const PetscInt leg_row_start = backward_leg_mapping->rowStart();
 

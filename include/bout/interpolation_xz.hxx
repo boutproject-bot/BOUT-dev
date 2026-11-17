@@ -315,9 +315,16 @@ public:
                       const BoutMask& mask,
                       const std::string& region = "RGN_NOBNDRY") override;
 };
+/// Parallel interpolation with weights precomputed by the grid generator
+///
+/// Uses the forward/backward operators of PetscOperators (support operator
+/// method), which are read from the grid file. Required on unstructured
+/// meshes (see Mesh::isUnstructured), but usable on any grid that contains
+/// the PetscOperators data. Only offsets of +1 and -1 are supported.
 class PrecomputedInterpolation : public XZInterpolation {
 #if BOUT_HAS_PETSC
-  PetscOperators op;
+  /// Shared with all other users on this mesh (PetscOperators::Cache)
+  std::shared_ptr<PetscOperators> op;
 #endif
 public:
   PrecomputedInterpolation(Mesh* mesh = nullptr, Options* options = nullptr)
