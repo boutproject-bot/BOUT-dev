@@ -193,6 +193,42 @@ def check_decomposition(cases: dict) -> list[str]:
     return failures
 
 
+# Cylindrical case: perpendicular operator only (pure toroidal field,
+# annulus with Dirichlet walls); see mms.py
+CYL_DIRECTORY = "data_cyl"
+CYL_NLIST = [8, 16, 32]
+CYL_OPERATORS = (
+    "FV_div_a_grad_perp",
+    "FV_div_a_grad_perp_flowZ",
+    "FV_div_a_grad_perp_upwind",
+)
+
+
+def check_cylindrical() -> list[str]:
+    errors = {operator: [] for operator in CYL_OPERATORS}
+    for n in CYL_NLIST:
+        gridname = f"mesh_cyl.{n}.fci.nc"
+        make_test_grid("bout_mms_cyl", n, filename=gridname)
+        cmd = f"./fci_mms -d {CYL_DIRECTORY} NXPE=1 mesh:file={gridname}"
+        print(f"Running command: {cmd}", end="")
+        start = time()
+        status, out = launch_safe(cmd, nproc=NPROC, mthread=MTHREAD, pipe=True)
+        print(f" ... done in {time() - start:.3}s")
+        pathlib.Path(CYL_DIRECTORY, f"run.log.{n}").write_text(out)
+        if status:
+            print(f"Run failed!\nOutput was:\n{out}")
+            sys.exit(status)
+        for operator in CYL_OPERATORS:
+            errors[operator].append(quiet_collect(f"{operator}_l_2", CYL_DIRECTORY))
+    failures = []
+    spacing = 1.0 / array(CYL_NLIST)
+    for operator in CYL_OPERATORS:
+        name = f"{operator} cylindrical"
+        if not assert_convergence(errors[operator], spacing, name, 2):
+            failures.append(name)
+    return failures
+
+
 def make_plots(cases: dict[str, dict]):
     try:
         import matplotlib.pyplot as plt
@@ -249,6 +285,7 @@ if __name__ == "__main__":
         failures.extend(failures_)
 
     failures.extend(check_decomposition(cases))
+    failures.extend(check_cylindrical())
 
     if args.dump_errors:
         pathlib.Path(args.dump_errors).write_text(json.dumps(cases))

@@ -19,6 +19,7 @@
 #include <petscvec.h>
 #endif
 
+#include <algorithm>
 #include <limits>
 #include <map>
 #include <math.h>
@@ -932,9 +933,32 @@ Div_a_Grad_perp_FCI_unstructured::Div_a_Grad_perp_FCI_unstructured(Mesh* mesh,
   auto ops = PetscOperators::Cache::get(mesh);
   const auto& cells = ops->cellMapping();
 
-  // Each face point belongs to the rank that owns its owner cell
-  const int n_facepoints = meshGetInt(mesh, "dagp_us_n_facepoints");
-  const auto owner = meshGetArray<int>(mesh, "dagp_us_facepoint_owner");
+  // Each face point belongs to the rank that owns its owner cell. Older grids
+  // (e.g. the TCV work-in-progress grids) have no ownership arrays: derive
+  // them from the divergence matrix, owning each face point with the first
+  // cell whose divergence uses it.
+  int n_facepoints{0};
+  Array<int> owner;
+  if (mesh->sourceHasVar("dagp_us_facepoint_owner")) {
+    n_facepoints = meshGetInt(mesh, "dagp_us_n_facepoints");
+    owner = meshGetArray<int>(mesh, "dagp_us_facepoint_owner");
+  } else {
+    n_facepoints = meshGetInt(mesh, "dagp_us_div_ncols");
+    const auto rows = meshGetArray<int>(mesh, "dagp_us_div_rows");
+    const auto cols = meshGetArray<int>(mesh, "dagp_us_div_columns");
+    owner = Array<int>(n_facepoints);
+    std::fill(owner.begin(), owner.end(), -1);
+    for (int cell = 0; cell + 1 < static_cast<int>(rows.size()); ++cell) {
+      for (int index = rows[cell]; index < rows[cell + 1]; ++index) {
+        if (owner[cols[index]] < 0) {
+          owner[cols[index]] = cell;
+        }
+      }
+    }
+    // Face points without any divergence entry do not affect the result;
+    // give them to the first cell so that every face point has an owner
+    std::replace(owner.begin(), owner.end(), -1, 0);
+  }
   if (owner.size() != n_facepoints) {
     throw BoutException("dagp_us_facepoint_owner has {} entries, expected {}",
                         owner.size(), n_facepoints);
@@ -948,18 +972,24 @@ Div_a_Grad_perp_FCI_unstructured::Div_a_Grad_perp_FCI_unstructured(Mesh* mesh,
   const auto faces =
       std::make_shared<const PetscFacePointMapping>(n_facepoints, local_facepoints);
 
-  const auto read = [&](const std::string& name, int expected_ncols) {
-    if (meshGetInt(mesh, name + "_ncols") != expected_ncols) {
-      throw BoutException("{}_ncols does not match the grid", name);
+  // Columns of the cell-space matrices are stored cell numbers; grids may
+  // omit the parallel-boundary virtual cells (numbered last), so ncols can
+  // be smaller than the cell space. Face-point columns must match exactly.
+  const auto read = [&](const std::string& name, int max_ncols, bool exact) {
+    const int ncols = meshGetInt(mesh, name + "_ncols");
+    if (ncols > max_ncols or (exact and ncols != max_ncols)) {
+      throw BoutException("{}_ncols = {} does not match the grid ({})", name, ncols,
+                          max_ncols);
     }
     return std::make_tuple(meshGetArray<int>(mesh, name + "_rows"),
                            meshGetArray<int>(mesh, name + "_columns"),
                            meshGetArray<BoutReal>(mesh, name + "_weights"));
   };
+
   const int n_cells = static_cast<int>(cells->globalSize());
-  auto [grad_rows, grad_cols, grad_weights] = read("dagp_us_gradp", n_cells);
-  auto [value_rows, value_cols, value_weights] = read("dagp_us_value", n_cells);
-  auto [div_rows, div_cols, div_weights] = read("dagp_us_div", n_facepoints);
+  auto [grad_rows, grad_cols, grad_weights] = read("dagp_us_gradp", n_cells, false);
+  auto [value_rows, value_cols, value_weights] = read("dagp_us_value", n_cells, false);
+  auto [div_rows, div_cols, div_weights] = read("dagp_us_div", n_facepoints, true);
 
   // The grid data are in metres; convert to normalised units as the
   // structured operator does (its volume is divided by rho_s0^2)
@@ -971,14 +1001,14 @@ Div_a_Grad_perp_FCI_unstructured::Div_a_Grad_perp_FCI_unstructured(Mesh* mesh,
       std::nullopt, std::nullopt, std::nullopt, std::nullopt, rho_s0});
 
   if (mesh->sourceHasVar("dagp_us_left_rows")) {
-    auto [l_rows, l_cols, l_weights] = read("dagp_us_left", n_cells);
-    auto [r_rows, r_cols, r_weights] = read("dagp_us_right", n_cells);
+    auto [l_rows, l_cols, l_weights] = read("dagp_us_left", n_cells, false);
+    auto [r_rows, r_cols, r_weights] = read("dagp_us_right", n_cells, false);
     impl->left.emplace(faces, cells, l_rows, l_cols, l_weights);
     impl->right.emplace(faces, cells, r_rows, r_cols, r_weights);
   }
   if (mesh->sourceHasVar("dagp_us_flowR_rows")) {
-    auto [fr_rows, fr_cols, fr_weights] = read("dagp_us_flowR", n_facepoints);
-    auto [fz_rows, fz_cols, fz_weights] = read("dagp_us_flowZ", n_facepoints);
+    auto [fr_rows, fr_cols, fr_weights] = read("dagp_us_flowR", n_facepoints, true);
+    auto [fz_rows, fz_cols, fz_weights] = read("dagp_us_flowZ", n_facepoints, true);
     // Flux vector in normalised units: one length scale (rho_s0) fewer
     // than the divergence
     impl->flowR.emplace(

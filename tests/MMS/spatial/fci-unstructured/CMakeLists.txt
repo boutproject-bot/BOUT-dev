@@ -6,4 +6,5 @@ bout_add_mms_test(
   REQUIRES BOUT_USE_METRIC_3D
   REQUIRES BOUT_HAS_PETSC
   PROCESSORS 2
+  EXTRA_FILES data_cyl/BOUT.inp
 )
