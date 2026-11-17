@@ -343,13 +343,13 @@ FCITransform::FCITransform(Mesh& mesh, const Coordinates::FieldMetric& dy, bool 
   const std::array bndries = {forward_boundary_xin, forward_boundary_xout,
                               backward_boundary_xin, backward_boundary_xout};
 
-  output.write("\n\n\e[34;47mFINDING DOUBLE BOUNDARIES\e[0m\n");
-  int count = 0;
+  [[maybe_unused]] int count = 0;
   for (const auto& bndry : bndries) {
     for (const auto& bndry2 : bndries) {
       if (bndry->dir() == bndry2->dir()) {
         continue;
       }
+      // Iterate by reference, so that setValid modifies the stored point
       for (auto& point : *bndry) {
         for (auto point2 : *bndry2) {
           if (point.ind() == point2.ind()) {
@@ -367,7 +367,7 @@ FCITransform::FCITransform(Mesh& mesh, const Coordinates::FieldMetric& dy, bool 
       }
     }
   }
-  output.write("Found {} double boundaries.\n\n\n", count);
+#if CHECK > 1
   if (count > 0) {
     int check = 0;
     for (const auto& bndry : bndries) {
@@ -377,8 +377,10 @@ FCITransform::FCITransform(Mesh& mesh, const Coordinates::FieldMetric& dy, bool 
         }
       }
     }
-    ASSERT0(check == count);
+    ASSERT1(check == count);
+    output_debug.write("FCITransform: found {} doubly bounded points\n", count);
   }
+#endif
 }
 
 void FCITransform::checkInputGrid() {
