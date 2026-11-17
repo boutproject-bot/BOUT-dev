@@ -50,6 +50,12 @@ struct ForwardLegSpaceTag {};
 /// leg space. See @ref ForwardLegSpaceTag and @ref CellSpaceTag.
 struct BackwardLegSpaceTag {};
 
+/// @brief Tag type identifying the face-point space F.
+///
+/// Quadrature points on the faces of the dual cells of an unstructured
+/// poloidal mesh, used by FV::Div_a_Grad_perp_FCI_unstructured.
+struct FacePointSpaceTag {};
+
 template <typename Out, typename In>
 class PetscOperator;
 
@@ -115,6 +121,11 @@ public:
   /// @returns The corresponding global PETSc row index.
   /// @throws BoutException if @p stored_index is not owned locally.
   PetscInt storedToPetsc(int stored_index) const;
+
+  /// @brief Is @p stored_index owned by this rank?
+  bool ownsStored(int stored_index) const {
+    return local_stored_to_petsc.contains(stored_index);
+  }
 
   /// @brief Return the permutation matrix that maps PETSc row ordering to stored
   ///        mesh-file numbering.
@@ -329,6 +340,15 @@ public:
 /// @brief Shared-pointer alias for a const PetscLegMapping.
 using PetscLegMappingPtr = std::shared_ptr<const PetscLegMapping>;
 
+/// @brief Index mapping for the face-point space F of an unstructured mesh.
+///
+/// Each face point is owned by the rank that owns its owner cell (as given
+/// by the grid file); the construction is the same as for leg spaces.
+class PetscFacePointMapping : public PetscLegMapping {
+public:
+  using PetscLegMapping::PetscLegMapping;
+};
+
 /// @brief Type-safe wrapper around a PETSc Vec belonging to a particular vector space.
 ///
 /// The compile-time @p SpaceTag (one of @ref CellSpaceTag, @ref ForwardLegSpaceTag,
@@ -481,6 +501,8 @@ using PetscCellVector = PetscSpaceVector<CellSpaceTag>;
 using PetscForwardLegVector = PetscSpaceVector<ForwardLegSpaceTag>;
 /// @brief PETSc vector in the backward leg space L-.
 using PetscBackwardLegVector = PetscSpaceVector<BackwardLegSpaceTag>;
+/// @brief PETSc vector in the face-point space F.
+using PetscFacePointVector = PetscSpaceVector<FacePointSpaceTag>;
 
 /// @brief Populate a PetscCellVector from a Field3D and its parallel slices.
 ///
@@ -826,6 +848,10 @@ using PetscCellOperator = PetscOperator<CellSpaceTag, CellSpaceTag>;
 using PetscForwardLegOperator = PetscOperator<ForwardLegSpaceTag, ForwardLegSpaceTag>;
 /// @brief Operator mapping within the backward leg space L-.
 using PetscBackwardLegOperator = PetscOperator<BackwardLegSpaceTag, BackwardLegSpaceTag>;
+/// @brief Operator mapping from cell space C to face-point space F.
+using PetscCellToFacePointOperator = PetscOperator<FacePointSpaceTag, CellSpaceTag>;
+/// @brief Operator mapping from face-point space F to cell space C.
+using PetscFacePointToCellOperator = PetscOperator<CellSpaceTag, FacePointSpaceTag>;
 
 /// @brief Factory that constructs cell-space and leg-space operators from mesh metadata.
 ///
@@ -847,6 +873,9 @@ public:
   /// @param mesh Non-owning pointer to the BOUT++ mesh. Must outlive this object.
   /// @throws BoutException if any required field or scalar is missing from the mesh.
   explicit PetscOperators(Mesh* mesh);
+
+  /// @brief The cell-space mapping C shared by all operators on this mesh.
+  const PetscCellMappingPtr& cellMapping() const { return cell_mapping; }
 
   /// @brief Build the forward interpolation operator F: L+ ← C.
   ///

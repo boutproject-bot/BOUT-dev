@@ -12,14 +12,6 @@
 #include "bout/output_bout_types.hxx" // NOLINT(unused-includes, misc-include-cleaner)
 #include "bout/region.hxx"
 #include "bout/vector2d.hxx"
-#if BOUT_HAS_PETSC
-#include <bout/petsclib.hxx>
-#include <petscmat.h>
-#include <petscsys.h>
-#include <petscsystypes.h>
-#include <petscvec.h>
-#endif
-
 #include <map>
 #include <memory>
 
@@ -248,36 +240,35 @@ private:
   static std::map<Mesh*, std::weak_ptr<Div_a_Grad_perp_FCI>> op_cache;
 };
 
+/// Div(a Grad_perp(f)) on unstructured FCI meshes (see Mesh::isUnstructured)
+///
+/// Node-centred finite volumes in the poloidal plane:
+/// result = Div * ((Value * a) .* (Grad * f)), where Grad and Value map cell
+/// values to quadrature points on the dual-cell faces, and Div sums the
+/// face fluxes and divides by the cell volume. The three sparse matrices are
+/// read from the grid file (zoidberg.unstructured) and applied with PETSc,
+/// which handles the domain decomposition. Requires PETSc.
+///
+/// Not supported: upwinding, and the flow diagnostics (returned as zero).
 class Div_a_Grad_perp_FCI_unstructured : public Div_a_Grad_perp_FCI {
 public:
-  Field3D operator()(const Field3D& a, const Field3D& f, Field3D& low_xlow,
+  Field3D operator()(const Field3D& a, const Field3D& f, Field3D& flow_xlow,
                      Field3D& flow_zlow, bool upwinding) const override;
   Field3D operator()(const Field3D& a, const Field3D& f, bool upwinding) const override;
   Div_a_Grad_perp_FCI_unstructured(Mesh* mesh, BoutReal rho_s0);
+  ~Div_a_Grad_perp_FCI_unstructured();
 
   static std::shared_ptr<Div_a_Grad_perp_FCI> create(Mesh* mesh, BoutReal rho_s0);
 
 private:
-  Mesh* mesh;
   static std::map<Mesh*, std::weak_ptr<Div_a_Grad_perp_FCI>> op_cache;
-#if BOUT_HAS_PETSC
-  Mat Div;
-  Mat Grad;
-  Mat Interp;
-  Vec inField;
-  Vec inA;
-  Vec vecGrad;
-  Vec vecInterp;
-  Vec multiplied;
-  Vec result;
-#endif
+  struct Impl;
+  std::unique_ptr<Impl> impl;
 };
 
 inline std::shared_ptr<Div_a_Grad_perp_FCI> Div_a_Grad_perp_FCI::create(Mesh* mesh,
                                                                         BoutReal rho_s0) {
-  bool unstructured{false};
-  mesh->get(unstructured, "unstructured", unstructured);
-  if (mesh->sourceHasVar("dagp_us_div_weights")) {
+  if (mesh->isUnstructured()) {
     return Div_a_Grad_perp_FCI_unstructured::create(mesh, rho_s0);
   }
   return Div_a_Grad_perp_FCI_structured::create(mesh, rho_s0);
