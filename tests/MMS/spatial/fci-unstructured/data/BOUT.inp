@@ -1,0 +1,39 @@
+# Generated solutions: run mms.py to update them
+
+# BOUT++ index coordinates x and z of the structured test (../fci), from
+# the grid geometry: R in [-Lx/2, Lx/2] with Lx = 0.1, Z periodic with Lz = 1
+xu = (gridvar:R + 0.05) / 0.1
+zu = 6.283185307179586 * gridvar:Z
+input_field = sin(y - 2*zu) + sin(y - zu)
+K = cos(y - zu)
+grad_par_solution = (6.28318530717959*(0.01*xu + 0.045)*(-2*cos(y - 2*zu) - cos(y - zu)) + 0.628318530717959*cos(y - 2*zu) + 0.628318530717959*cos(y - zu))/sqrt((0.01*xu + 0.045)^2 + 1.0)
+grad2_par2_solution = (6.28318530717959*(0.01*xu + 0.045)*(6.28318530717959*(0.01*xu + 0.045)*(-4*sin(y - 2*zu) - sin(y - zu)) + 1.25663706143592*sin(y - 2*zu) + 0.628318530717959*sin(y - zu))/sqrt((0.01*xu + 0.045)^2 + 1.0) + 0.628318530717959*(6.28318530717959*(0.01*xu + 0.045)*(2*sin(y - 2*zu) + sin(y - zu)) - 0.628318530717959*sin(y - 2*zu) - 0.628318530717959*sin(y - zu))/sqrt((0.01*xu + 0.045)^2 + 1.0))/sqrt((0.01*xu + 0.045)^2 + 1.0)
+div_par_solution = (0.01*xu + 0.045)*(-12.5663706143592*cos(y - 2*zu) - 6.28318530717959*cos(y - zu) + 0.628318530717959*(cos(y - 2*zu) + cos(y - zu))/(0.01*xu + 0.045))/sqrt((0.01*xu + 0.045)^2 + 1.0)
+div_par_K_grad_par_solution = (0.01*xu + 0.045)*(6.28318530717959*sin(y - zu) - 0.628318530717959*sin(y - zu)/(0.01*xu + 0.045))*(6.28318530717959*(0.01*xu + 0.045)*(-2*cos(y - 2*zu) - cos(y - zu)) + 0.628318530717959*cos(y - 2*zu) + 0.628318530717959*cos(y - zu))/((0.01*xu + 0.045)^2 + 1.0) + (6.28318530717959*(0.01*xu + 0.045)*(6.28318530717959*(0.01*xu + 0.045)*(-4*sin(y - 2*zu) - sin(y - zu)) + 1.25663706143592*sin(y - 2*zu) + 0.628318530717959*sin(y - zu))/sqrt((0.01*xu + 0.045)^2 + 1.0) + 0.628318530717959*(6.28318530717959*(0.01*xu + 0.045)*(2*sin(y - 2*zu) + sin(y - zu)) - 0.628318530717959*sin(y - 2*zu) - 0.628318530717959*sin(y - zu))/sqrt((0.01*xu + 0.045)^2 + 1.0))*cos(y - zu)/sqrt((0.01*xu + 0.045)^2 + 1.0)
+div_par_K_grad_par_mod_solution = (0.01*xu + 0.045)*(6.28318530717959*sin(y - zu) - 0.628318530717959*sin(y - zu)/(0.01*xu + 0.045))*(6.28318530717959*(0.01*xu + 0.045)*(-2*cos(y - 2*zu) - cos(y - zu)) + 0.628318530717959*cos(y - 2*zu) + 0.628318530717959*cos(y - zu))/((0.01*xu + 0.045)^2 + 1.0) + (6.28318530717959*(0.01*xu + 0.045)*(6.28318530717959*(0.01*xu + 0.045)*(-4*sin(y - 2*zu) - sin(y - zu)) + 1.25663706143592*sin(y - 2*zu) + 0.628318530717959*sin(y - zu))/sqrt((0.01*xu + 0.045)^2 + 1.0) + 0.628318530717959*(6.28318530717959*(0.01*xu + 0.045)*(2*sin(y - 2*zu) + sin(y - zu)) - 0.628318530717959*sin(y - 2*zu) - 0.628318530717959*sin(y - zu))/sqrt((0.01*xu + 0.045)^2 + 1.0))*cos(y - zu)/sqrt((0.01*xu + 0.045)^2 + 1.0)
+laplace_par_solution = (0.01*xu + 0.045)*(6.28318530717959*(6.28318530717959*(0.01*xu + 0.045)*(-4*sin(y - 2*zu) - sin(y - zu)) + 1.25663706143592*sin(y - 2*zu) + 0.628318530717959*sin(y - zu))/sqrt((0.01*xu + 0.045)^2 + 1.0) + 0.628318530717959*(6.28318530717959*(0.01*xu + 0.045)*(2*sin(y - 2*zu) + sin(y - zu)) - 0.628318530717959*sin(y - 2*zu) - 0.628318530717959*sin(y - zu))/((0.01*xu + 0.045)*sqrt((0.01*xu + 0.045)^2 + 1.0)))/sqrt((0.01*xu + 0.045)^2 + 1.0)
+FV_div_par_mod_solution = (0.01*xu + 0.045)*(6.28318530717959*(0.01*xu + 0.045)*((sin(y - 2*zu) + sin(y - zu))*sin(y - zu)/(0.01*xu + 0.045) + (-2*cos(y - 2*zu) - cos(y - zu))*cos(y - zu)/(0.01*xu + 0.045)) - 0.628318530717959*(sin(y - 2*zu) + sin(y - zu))*sin(y - zu)/(0.01*xu + 0.045) + 0.628318530717959*(cos(y - 2*zu) + cos(y - zu))*cos(y - zu)/(0.01*xu + 0.045))/sqrt((0.01*xu + 0.045)^2 + 1.0)
+FV_div_par_fvv_solution = (0.01*xu + 0.045)*(6.28318530717959*(0.01*xu + 0.045)*(2*(sin(y - 2*zu) + sin(y - zu))*sin(y - zu)*cos(y - zu)/(0.01*xu + 0.045) + (-2*cos(y - 2*zu) - cos(y - zu))*cos(y - zu)^2/(0.01*xu + 0.045)) - 1.25663706143592*(sin(y - 2*zu) + sin(y - zu))*sin(y - zu)*cos(y - zu)/(0.01*xu + 0.045) + 0.628318530717959*(cos(y - 2*zu) + cos(y - zu))*cos(y - zu)^2/(0.01*xu + 0.045))/sqrt((0.01*xu + 0.045)^2 + 1.0)
+FV_div_a_grad_perp_solution = 39.4784176043574*(-4*sin(y - 2*zu) - sin(y - zu))*cos(y - zu) + 39.4784176043574*(-2*cos(y - 2*zu) - cos(y - zu))*sin(y - zu)
+
+[mesh]
+file = fci.grid.nc
+MXG = 1
+MYG = 1
+NXPE = 1
+
+[mesh:ddy]
+first = C2
+second = C2
+
+[mesh:paralleltransform]
+type = fci
+y_periodic = true
+z_periodic = true
+
+[mesh:paralleltransform:xzinterpolation]
+type = precomputed
+
+[input:grid_variables]
+R = field3d
+Z = field3d
