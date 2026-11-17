@@ -1,3 +1,5 @@
+import pathlib
+import shutil
 import subprocess
 import sys
 import numpy as np
@@ -98,6 +100,40 @@ def analyse_path(path, plot=False, tol=1e-12):
         fig.savefig("diffusion.png")
 
 
+def run(nproc, args=""):
+    """Run in its own directory (a copy of data/) and return the path."""
+    path = f"data_np{nproc}{args.replace(' ', '_').replace('=', '')}"
+    pathlib.Path(path).mkdir(exist_ok=True)
+    shutil.copy("data/BOUT.inp", path)
+    status, out = launch_safe(
+        f"./test_petsc_operators -d {path} {args}", nproc=nproc, pipe=True
+    )
+    pathlib.Path(path, "run.log").write_text(out)
+    assert status == 0, out
+    return path
+
+
+# Operator outputs that must not depend on the domain decomposition
+DECOMPOSITION_INVARIANT = (
+    "forward_op",
+    "grad_par_op",
+    "div_par_op",
+    "div_par_grad_par_op",
+    "dV",
+)
+
+
+def check_decomposition(reference, path, rtol=1e-12):
+    for name in DECOMPOSITION_INVARIANT:
+        a = collect(name, path=reference, info=False)
+        b = collect(name, path=path, info=False)
+        # Compare away from the X boundaries, as in analyse_path
+        np.testing.assert_allclose(
+            b[2:-2], a[2:-2], rtol=rtol, atol=rtol * np.max(np.abs(a[2:-2])),
+            err_msg=f"{name} differs between {reference} and {path}",
+        )
+
+
 def test_petsc_operators():
     grid_path = "grid.fci.nc"
 
@@ -107,12 +143,12 @@ def test_petsc_operators():
     # Build executable
     build_and_log("test_petsc_operators")
 
-    nproc = 1
+    reference = run(1)
+    analyse_path(reference)
 
-    _, out = launch_safe(
-        "./test_petsc_operators",
-        nproc=nproc,
-        pipe=True,
-    )
-
-    analyse_path("data")
+    # The CSR assembly maps stored (grid-file) numbering to PETSc ordering;
+    # check that results do not depend on the domain decomposition
+    for args in ("NXPE=1", "NXPE=2"):
+        path = run(2, args)
+        analyse_path(path)
+        check_decomposition(reference, path)
