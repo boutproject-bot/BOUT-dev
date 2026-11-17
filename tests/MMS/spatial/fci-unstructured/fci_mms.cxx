@@ -68,18 +68,22 @@ int main(int argc, char** argv) {
   fci_op_test("FV_div_par_mod", dump, input, FV::Div_par_mod(input, K, K, flow_ylow));
   fci_op_test("FV_div_par_fvv", dump, input, FV::Div_par_fvv(input, K, K));
 
-  // Perpendicular diffusion (poloidal-plane form on unstructured meshes)
-  const auto dagp = FV::Div_a_Grad_perp_FCI::create(mesh, 1.0);
-  const Field3D dagp_result = (*dagp)(K, input, false);
-  fci_op_test("FV_div_a_grad_perp", dump, input, dagp_result);
+  {
+    // Perpendicular diffusion (poloidal-plane form on unstructured meshes).
+    // In its own scope so that the PETSc objects are released before
+    // BoutFinalise
+    const auto dagp = FV::Div_a_Grad_perp_FCI::create(mesh, 1.0);
+    const Field3D dagp_result = (*dagp)(K, input, false);
+    fci_op_test("FV_div_a_grad_perp", dump, input, dagp_result);
 
-  // Conservation: every plane is closed (periodic in Z, zero-flux walls in
-  // R), so the volume integral vanishes
-  Field3D volume{mesh};
-  mesh->get(volume, "dagp_us_volume", 0.0, false);
-  dump["FV_div_a_grad_perp_integral"] =
-      mean(volume * dagp_result, true, "RGN_NOBNDRY")
-      / mean(volume * abs(dagp_result), true, "RGN_NOBNDRY");
+    // Conservation: every plane is closed (periodic in Z, zero-flux walls in
+    // R), so the volume integral vanishes
+    Field3D volume{mesh};
+    mesh->get(volume, "dagp_us_volume", 0.0, false);
+    dump["FV_div_a_grad_perp_integral"] =
+        mean(volume * dagp_result, true, "RGN_NOBNDRY")
+        / mean(volume * abs(dagp_result), true, "RGN_NOBNDRY");
+  }
 
   bout::writeDefaultOutputFile(dump);
 
