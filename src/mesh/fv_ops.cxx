@@ -1037,8 +1037,9 @@ Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Fi
     }
     // As in the structured operator, take a from the side with the larger f
     // (where the diffusive flux comes from). The face gradient S.grad f is
-    // positive if f increases towards the right node. The value is a
-    // second-order upwind reconstruction a_side + (x_f - x_side).grad a.
+    // positive if f increases towards the right node. The value is the
+    // reconstruction from the upwind side stored in the grid file
+    // (dagp_us_left/right).
     a_face = (*left)(a_cells);
     const auto a_right = (*right)(a_cells);
     PetscScalar* av{nullptr};

@@ -249,8 +249,9 @@ In brief:
   conditions are evaluated there.
 - `FV::Div_a_Grad_perp_FCI::create` returns an implementation that applies
   sparse matrices from the grid file (node-centred finite volumes in the
-  poloidal plane). Upwinding uses a second-order reconstruction from the
-  side with the larger value, and the flow diagnostics are the R and Z
+  poloidal plane). Upwinding uses a reconstruction of ``a`` from the side
+  with the larger value (zoidberg writes the order-4 fit around that node,
+  evaluated at the face point), and the flow diagnostics are the R and Z
   components of the cell-averaged flux vector; both need the optional
   ``dagp_us_left/right`` and ``dagp_us_flowR/flowZ`` matrices (older grids
   without them throw on upwinding and return zero flows).

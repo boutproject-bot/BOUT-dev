@@ -250,9 +250,10 @@ private:
 /// which handles the domain decomposition. Requires PETSc.
 ///
 /// Upwinding takes a from the side with the larger f at each face point, as
-/// the structured operator does, using a second-order upwind reconstruction
-/// (the structured operator uses the node value, which is inconsistent on
-/// irregular meshes). The flows are not face fluxes (faces are not
+/// the structured operator does, using an upwind reconstruction from the grid
+/// file (zoidberg writes the order-4 fit around the upwind node, evaluated at
+/// the face point; the structured operator uses the node value, which is
+/// inconsistent on irregular meshes). The flows are not face fluxes (faces are not
 /// aligned with x or z): flow_xlow and flow_zlow return the R and Z components
 /// of the cell-averaged flux vector -a grad_perp f, in normalised units.
 /// Upwinding and flows need the optional grid arrays dagp_us_left/right and
