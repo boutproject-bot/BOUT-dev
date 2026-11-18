@@ -71,6 +71,9 @@ public:
 
   /// Get the mesh for this context (position)
   /// If the mesh is null this will throw a BoutException (if CHECK >= 1)
+  /// The mesh, or nullptr if the context has none
+  Mesh* getMeshIfSet() const { return localmesh; }
+
   Mesh* getMesh() const {
     ASSERT1(localmesh)
     return localmesh;
