@@ -602,6 +602,21 @@ public:
     return result;
   }
 
+  /// @brief Apply the operator into an existing vector: @c result = A * rhs.
+  ///
+  /// Avoids allocating a new vector, e.g. for work vectors reused between calls.
+  void apply(const PetscSpaceVector<InSpaceTag>& rhs,
+             PetscSpaceVector<OutSpaceTag>& result) const {
+    ASSERT0(in_mapping == rhs.getMapping());
+    ASSERT0(out_mapping == result.getMapping());
+    BOUT_DO_PETSC(MatMult(*this->mat_operator, rhs.raw(), result.raw()));
+  }
+
+  /// Output-space mapping (for allocating vectors to use with apply)
+  const std::shared_ptr<const PetscIndexMapping>& outMapping() const {
+    return out_mapping;
+  }
+
   /// @brief Apply the operator to a Field3D: converts to a cell vector then applies.
   ///
   /// Only available when @p InSpaceTag is @ref CellSpaceTag and @p OutSpaceTag is

@@ -860,6 +860,13 @@ struct Div_a_Grad_perp_FCI_unstructured::Impl {
   std::optional<PetscFacePointToCellOperator> flowZ;
   BoutReal rho_s0;
 
+  /// Work vectors reused between calls (no PETSc allocations per call)
+  struct Work {
+    PetscCellVector a_cells, f_cells, cells_out;
+    PetscFacePointVector grad_face, a_face, a_right, flux;
+  };
+  mutable std::optional<Work> work;
+
   Field3D apply(const Field3D& a, const Field3D& f, bool upwinding, Field3D* flow_R,
                 Field3D* flow_Z) const;
 };
@@ -883,17 +890,14 @@ int meshGetInt(Mesh* mesh, const std::string& name) {
   return result;
 }
 
-/// Pack the evolving cells of a field into a cell-space vector. Unlike
-/// makePetscCellVector, this needs no parallel slices: the parallel boundary
-/// (virtual) cells are not used by this operator and are set to zero.
-PetscCellVector packCells(const PetscCellMappingPtr& mapping, const Field3D& f) {
-  PetscCellVector out(mapping);
+/// Pack the evolving cells of a field into an existing cell-space vector
+void packCellsInto(const PetscCellMappingPtr& mapping, const Field3D& f,
+                   PetscCellVector& out) {
   BOUT_DO_PETSC(VecSet(out.raw(), 0.0));
   PetscScalar* x{nullptr};
   BOUT_DO_PETSC(VecGetArray(out.raw(), &x));
   mapping->mapLocalField([&](PetscInt row, const Ind3D& i) { x[row] = f[i]; });
   BOUT_DO_PETSC(VecRestoreArray(out.raw(), &x));
-  return out;
 }
 
 /// Unpack a cell-space vector into a field without parallel slices
@@ -1025,11 +1029,22 @@ Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Fi
                                                       Field3D* flow_Z) const {
   ASSERT1_FIELDS_COMPATIBLE(a, f);
   const auto& cells = ops->cellMapping();
-  const auto a_cells = packCells(cells, a);
-  const auto f_cells = packCells(cells, f);
-  const auto grad_face = grad(f_cells);
+  if (not work) {
+    const auto faces =
+        std::static_pointer_cast<const PetscFacePointMapping>(grad.outMapping());
+    work.emplace(Work{PetscCellVector(cells), PetscCellVector(cells),
+                      PetscCellVector(cells), PetscFacePointVector(faces),
+                      PetscFacePointVector(faces), PetscFacePointVector(faces),
+                      PetscFacePointVector(faces)});
+  }
+  auto& w = *work;
+  packCellsInto(cells, a, w.a_cells);
+  packCellsInto(cells, f, w.f_cells);
+  const auto& a_cells = w.a_cells;
+  const auto& grad_face = w.grad_face;
+  grad.apply(w.f_cells, w.grad_face);
 
-  PetscFacePointVector a_face;
+  auto& a_face = w.a_face;
   if (upwinding) {
     if (not(left and right)) {
       throw BoutException("Upwinding on unstructured meshes needs dagp_us_left/right "
@@ -1040,8 +1055,9 @@ Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Fi
     // positive if f increases towards the right node. The value is the
     // reconstruction from the upwind side stored in the grid file
     // (dagp_us_left/right).
-    a_face = (*left)(a_cells);
-    const auto a_right = (*right)(a_cells);
+    left->apply(a_cells, a_face);
+    right->apply(a_cells, w.a_right);
+    const auto& a_right = w.a_right;
     PetscScalar* av{nullptr};
     const PetscScalar* ar{nullptr};
     const PetscScalar* gf{nullptr};
@@ -1059,14 +1075,17 @@ Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Fi
     BOUT_DO_PETSC(VecRestoreArrayRead(a_right.raw(), &ar));
     BOUT_DO_PETSC(VecRestoreArrayRead(grad_face.raw(), &gf));
   } else {
-    a_face = value(a_cells);
+    value.apply(a_cells, a_face);
   }
-  const auto flux = PetscFacePointVector::pointwiseMultiply(a_face, grad_face);
+  auto& flux = w.flux;
+  BOUT_DO_PETSC(VecPointwiseMult(flux.raw(), a_face.raw(), grad_face.raw()));
 
   if (flow_R != nullptr) {
     if (flowR and flowZ) {
-      *flow_R = unpackCells((*flowR)(flux), f);
-      *flow_Z = unpackCells((*flowZ)(flux), f);
+      flowR->apply(flux, w.cells_out);
+      *flow_R = unpackCells(w.cells_out, f);
+      flowZ->apply(flux, w.cells_out);
+      *flow_Z = unpackCells(w.cells_out, f);
     } else {
       *flow_R = zeroFrom(f);
       *flow_Z = zeroFrom(f);
@@ -1074,7 +1093,8 @@ Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Fi
     flow_R->setRegion("RGN_NOBNDRY");
     flow_Z->setRegion("RGN_NOBNDRY");
   }
-  auto result = unpackCells(div(flux), f);
+  div.apply(flux, w.cells_out);
+  auto result = unpackCells(w.cells_out, f);
   result.setRegion("RGN_NOBNDRY");
   return result;
 }
