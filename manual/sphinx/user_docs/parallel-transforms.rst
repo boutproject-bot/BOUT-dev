@@ -249,16 +249,24 @@ In brief:
   conditions are evaluated there.
 - `FV::Div_a_Grad_perp_FCI::create` returns an implementation that applies
   sparse matrices from the grid file (node-centred finite volumes in the
-  poloidal plane). It does not support upwinding, and the flow
-  diagnostics are returned as zero.
+  poloidal plane). Upwinding uses a second-order reconstruction from the
+  side with the larger value, and the flow diagnostics are the R and Z
+  components of the cell-averaged flux vector; both need the optional
+  ``dagp_us_left/right`` and ``dagp_us_flowR/flowZ`` matrices (older grids
+  without them throw on upwinding and return zero flows).
 
 - Perpendicular Dirichlet walls: grids generated with
   ``dirichlet_walls=True`` store the wall nodes in the x guard cells
-  (``MXG`` = number of wall nodes per side). They are not evolved; set them
-  with the ``dirichlet_node`` boundary condition, which evaluates the value
-  at each guard cell (``dirichlet`` would place the boundary half way to the
-  neighbouring x index, which is not a geometric neighbour here). With
-  ``NXPE > 1`` every processor needs at least ``MXG`` evolving nodes.
+  (``MXG`` = number of wall nodes per side). The walls can have any shape,
+  for example flux surfaces or the boundary of a gmsh mesh. Wall nodes are
+  not evolved; set them with the ``dirichlet_node`` boundary condition,
+  which evaluates the value at each guard cell (``dirichlet`` would place
+  the boundary half way to the neighbouring x index, which is not a
+  geometric neighbour here). Because ``MXG`` guard cells are exchanged
+  between processors, ``NXPE > 1`` needs at least ``MXG`` evolving nodes
+  per processor: the automatic processor split respects this, and an
+  explicit ``NXPE`` that violates it stops at start-up with the largest
+  allowed value.
 
 Because x and z are index coordinates, input expressions should use the
 grid geometry instead, for example
