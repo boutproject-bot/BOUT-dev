@@ -36,6 +36,10 @@ OPERATORS = (
     "div_par_K_grad_par",
     "div_par_K_grad_par_mod",
     "div_par_K_grad_par_som",
+    "so_grad_par",
+    "so_div_par",
+    "so_laplace_par",
+    "so_div_par_K_grad_par",
     "laplace_par",
     "FV_div_par_mod",
     "FV_div_par_fvv",
@@ -50,15 +54,30 @@ OPERATORS = (
 operator_order = {
     "FV_div_par_fvv": 1,
 }
-# The support-operator conduction is conservative but not locally consistent
-# on independently interpolated planes: its operator error does not decrease
-# with resolution (0.031, 0.031, 0.052, 0.089 for n = 8...64; the solution of
-# a diffusion problem still converges, at order 0.6-0.9; see the follow-up 4
-# report). Its order is reported, not asserted; the error must stay below
-# this bound (regression check).
-RECORD_ONLY = {"div_par_K_grad_par_som": 0.15}
-# Same for the cylindrical sheared case (set from the measured errors)
-RECORD_ONLY_CYL = {"div_par_K_grad_par_som": 0.3}
+# Support operators (PetscOperators::Parallel). The gradient converges at
+# order 2 (asserted). The divergence, built as the adjoint of the gradient, is
+# not locally consistent on these irregular meshes: the adjoint of the
+# interpolation does not return each cell its own volume, so its error does
+# not decrease with resolution (so_div_par 0.14, 0.14, 0.25, 0.43 for
+# n = 8...64), and neither do the operators built from it (Div_par_Grad_par,
+# Div_par_K_Grad_par; the solution of a diffusion problem still converges, at
+# order 0.6-0.9; see the follow-up 4 report). On structured grids all four
+# converge at order 2 (../fci). Their orders are reported, not asserted; the
+# errors must stay below these bounds (regression check, about 1.5x the
+# measured largest error).
+RECORD_ONLY = {
+    "div_par_K_grad_par_som": 0.15,
+    "so_div_par": 0.65,
+    "so_laplace_par": 0.15,
+    "so_div_par_K_grad_par": 0.15,
+}
+# Same for the cylindrical sheared case
+RECORD_ONLY_CYL = {
+    "div_par_K_grad_par_som": 0.3,
+    "so_div_par": 0.3,
+    "so_laplace_par": 0.3,
+    "so_div_par_K_grad_par": 0.3,
+}
 # Resolution in y and z; the number of R layers is fixed (as NX is in ../fci)
 NLIST = [8, 16, 32, 64]
 dx = 1.0 / array(NLIST)
@@ -264,6 +283,10 @@ CYLP_OPERATORS = (
     "grad_par",
     "div_par_K_grad_par_mod",
     "div_par_K_grad_par_som",
+    "so_grad_par",
+    "so_div_par",
+    "so_laplace_par",
+    "so_div_par_K_grad_par",
 )
 
 

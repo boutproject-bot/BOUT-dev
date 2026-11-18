@@ -3,13 +3,13 @@
 # Generate manufactured solution and sources for FCI test
 #
 
-from math import pi
 import warnings
+from math import pi
 
-from boututils.boutwarnings import AlwaysWarning
 from boutdata.data import BoutOptionsFile
 from boutdata.mms import diff, exprToStr, x, y, z
-from sympy import sin, cos, sqrt, Expr
+from boututils.boutwarnings import AlwaysWarning
+from sympy import Expr, cos, sin, sqrt
 
 warnings.simplefilter("ignore", AlwaysWarning)
 
@@ -65,6 +65,10 @@ for name, expr in (
     ("laplace_par_solution", FCI_Laplace_par(f)),
     ("FV_div_par_mod_solution", FCI_div_par(f * K)),
     ("FV_div_par_fvv_solution", FCI_div_par(f * K * K)),
+    ("so_grad_par_solution", FCI_grad_par(f)),
+    ("so_div_par_solution", FCI_div_par(f)),
+    ("so_laplace_par_solution", FCI_Laplace_par(f)),
+    ("so_div_par_K_grad_par_solution", FCI_div_par_K_grad_par(f, K)),
 ):
     expr_str = exprToStr(expr)
     print(f"{name} = {expr_str}")

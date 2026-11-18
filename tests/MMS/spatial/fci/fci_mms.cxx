@@ -8,6 +8,9 @@
 #include "bout/globals.hxx"
 #include "bout/options.hxx"
 #include "bout/options_io.hxx"
+#if BOUT_HAS_PETSC
+#include "bout/petsc_operators.hxx"
+#endif
 #include "bout/utils.hxx"
 
 #include <fmt/format.h>
@@ -67,6 +70,22 @@ int main(int argc, char** argv) {
   // Finite volume methods
   fci_op_test("FV_div_par_mod", dump, input, FV::Div_par_mod(input, K, K, flow_ylow));
   fci_op_test("FV_div_par_fvv", dump, input, FV::Div_par_fvv(input, K, K));
+
+  // Support operators (PetscOperators::Parallel, matrices from the grid file)
+  if (Options::root()["support_operators"]
+          .doc("Test the support operators (needs the operator data in the grid)")
+          .withDefault(false)) {
+#if BOUT_HAS_PETSC
+    const auto par = PetscOperators::Cache::getParallel(mesh);
+    fci_op_test("so_grad_par", dump, input, par->Grad_par(input));
+    fci_op_test("so_div_par", dump, input, par->Div_par(input));
+    fci_op_test("so_laplace_par", dump, input, par->Div_par_Grad_par(input));
+    fci_op_test("so_div_par_K_grad_par", dump, input,
+                par->Div_par_K_Grad_par(K, input, false));
+#else
+    throw BoutException("The support operators need PETSc");
+#endif
+  }
 
   bout::writeDefaultOutputFile(dump);
 
