@@ -104,6 +104,18 @@ PetscErrorCode PetscPreconditioner::createJacobianPattern(Field3D& index,
   // Use global mesh for now
   Mesh* mesh = bout::globals::mesh;
 
+  if (mesh->isUnstructured()) {
+    // The pattern is a stencil in (x, y, z) index space. On unstructured
+    // meshes the nodes along x are Morton-ordered triangle-mesh nodes, the
+    // perpendicular operators couple nodes far apart in x, and the parallel
+    // maps interpolate from up to ~30 nodes: most couplings would be missing,
+    // giving a wrong finite-difference Jacobian.
+    throw BoutException(
+        "Jacobian colouring is not supported on unstructured meshes (the colouring "
+        "pattern is a structured index-space stencil). Use CVODE with "
+        "cvode_precon_method = none (the default) or user");
+  }
+
   //////////////////////////////////////////////////
   // Pre-allocate PETSc storage
 
