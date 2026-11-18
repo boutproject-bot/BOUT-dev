@@ -1002,7 +1002,7 @@ public:
     PetscCellOperator Div_par;
     /// Combined SOM parallel Laplacian (Div_par ∘ Grad_par): C ← C.
     PetscCellOperator Div_par_Grad_par;
-    /// Cell volume J * dx * dy * dz.
+    /// Cell volume J * dx * dy * dz (dy * dagp_us_volume on unstructured grids).
     Field3D dV;
 
     /// Half-step gradient on the backward (y-1) side: L- ← C.
@@ -1051,6 +1051,8 @@ public:
     ///        ending at a boundary virtual cell) is set to zero, as in the
     ///        original method with bndry_flux = false (e.g. when a sheath
     ///        boundary condition removes the boundary heat flux separately).
+    ///        If true, the full flux through the boundary faces is included
+    ///        (boundary legs are weighted 2 in their half-operator).
     /// @returns Field3D containing Div_par(K * Grad_par(f)) at interior cells.
     Field3D Div_par_K_Grad_par(const Field3D& K, const Field3D& f,
                                bool bndry_flux = true) const;
@@ -1167,11 +1169,20 @@ private:
   template <typename LegVector>
   LegVector interiorLegMask(const Field3D& boundary_leg_number,
                             std::shared_ptr<const PetscLegMapping> mapping) const {
-    std::set<int> boundary;
+    return legValues<LegVector>(boundary_leg_number, std::move(mapping), 1.0, 0.0);
+  }
+
+  /// @brief Vector over a leg space with @p interior on interior legs and
+  /// @p boundary on legs that end at a parallel boundary.
+  template <typename LegVector>
+  LegVector legValues(const Field3D& boundary_leg_number,
+                      std::shared_ptr<const PetscLegMapping> mapping, BoutReal interior,
+                      BoutReal boundary) const {
+    std::set<int> boundary_legs;
     cell_mapping->mapOwnedInteriorCells([&](PetscInt, const Ind3D& i, int) {
       const int leg = ROUND(boundary_leg_number[i]);
       if (leg >= 0) {
-        boundary.insert(leg);
+        boundary_legs.insert(leg);
       }
     });
     LegVector out(mapping);
@@ -1179,7 +1190,7 @@ private:
     BOUT_DO_PETSC(VecGetArray(out.raw(), &x));
     const auto& local = mapping->localStoredIndices();
     for (PetscInt i = 0; i < static_cast<PetscInt>(local.size()); ++i) {
-      x[i] = (boundary.count(local[i]) != 0) ? 0.0 : 1.0;
+      x[i] = (boundary_legs.count(local[i]) != 0) ? boundary : interior;
     }
     BOUT_DO_PETSC(VecRestoreArray(out.raw(), &x));
     return out;

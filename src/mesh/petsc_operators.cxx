@@ -343,10 +343,12 @@ PetscOperators::Parallel PetscOperators::getParallel() const {
   Field3D dV =
       Coordinates::FieldMetric{coords->J() * coords->dx() * coords->dy() * coords->dz()};
   if (mesh->isUnstructured() and mesh->sourceHasVar("dagp_us_volume")) {
-    // Unstructured grids use dx = dz = 1: the poloidal area of each node
-    // (its dual cell) is stored separately. Without it the operators would
-    // conserve sum(J dy f) instead of the physical integral.
-    dV *= meshGetField3D(mesh, "dagp_us_volume");
+    // Unstructured grids use dx = dz = 1 and store the poloidal volume
+    // element of each node (its dual cell) separately: the area, times the
+    // major radius on cylindrical grids. The physical volume is dy times
+    // this, the measure that the perpendicular operator conserves. J is not
+    // used: it is sqrt(g_22) on these grids, which would count R twice.
+    dV = Coordinates::FieldMetric{coords->dy()} * meshGetField3D(mesh, "dagp_us_volume");
   }
   dV.splitParallelSlices();
   dV.yup() = 0.0;
@@ -405,9 +407,20 @@ PetscOperators::Parallel PetscOperators::getParallel() const {
   // Cell-centered divergence paired with the cell-centered gradient
   auto Div_par = Neg_inv_dV * Grad_par.transpose() * DV; // C <- C
 
+  // Boundary virtual cells own no legs, so a face at a parallel boundary
+  // appears in only one of the two half-operators (as the leg from the last
+  // cell into the boundary cell), while every interior face appears in
+  // both. Boundary legs therefore get weight 2 in their half-operator, so
+  // that the average of the two halves contains the full boundary flux.
+  const auto Bndry_weight_plus = diagonal(legValues<PetscForwardLegVector>(
+      forward_leg_boundary_number, forward_leg_mapping, 1.0, 2.0));
+  const auto Bndry_weight_minus = diagonal(legValues<PetscBackwardLegVector>(
+      backward_leg_boundary_number, backward_leg_mapping, 1.0, 2.0));
+
   // Diffusion operator assembled from the half-step pieces
-  auto Div_par_Grad_par =
-      ((Div_minus * Grad_plus) + (Div_plus * Grad_minus)) * 0.5; // C <- C
+  auto Div_par_Grad_par = ((Div_minus * Bndry_weight_plus * Grad_plus)
+                           + (Div_plus * Bndry_weight_minus * Grad_minus))
+                          * 0.5; // C <- C
 
   return Parallel{// Cell <- Cell operators
                   std::move(Grad_par), std::move(Div_par), std::move(Div_par_Grad_par),
@@ -439,7 +452,14 @@ Field3D PetscOperators::Parallel::Div_par_K_Grad_par(const Field3D& K, const Fie
 
   auto flux_plus = PetscForwardLegVector::pointwiseMultiply(K_plus, grad_plus);
   auto flux_minus = PetscBackwardLegVector::pointwiseMultiply(K_minus, grad_minus);
-  if (not bndry_flux) {
+  if (bndry_flux) {
+    // A boundary face appears in only one half-operator (see getParallel):
+    // weight 2 on boundary legs, i.e. flux * (2 - interior mask)
+    flux_plus = (flux_plus * 2.0)
+                - PetscForwardLegVector::pointwiseMultiply(flux_plus, Interior_plus);
+    flux_minus = (flux_minus * 2.0)
+                 - PetscBackwardLegVector::pointwiseMultiply(flux_minus, Interior_minus);
+  } else {
     // No flux through the parallel boundaries
     flux_plus = PetscForwardLegVector::pointwiseMultiply(flux_plus, Interior_plus);
     flux_minus = PetscBackwardLegVector::pointwiseMultiply(flux_minus, Interior_minus);

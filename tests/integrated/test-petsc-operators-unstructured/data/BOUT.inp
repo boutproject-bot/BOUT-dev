@@ -1,0 +1,20 @@
+# Unstructured slab with y walls (grid made by runtest), straight field
+
+# Linear along the field lines: d f / d l = 1 (dl = dy, ny = 16 cells over
+# Ly = 10, y in [0, 2 pi])
+f = 10 * y / (2 * pi)
+
+# f at the nearest wall (y = 0 and y = 2 pi): f -+ dl/2 in the first and last
+# cells (dl = 0.625), used as boundary value there
+f_wall = 10 * y / (2 * pi) + 0.3125 * (2 * H(y - pi) - 1)
+
+[mesh]
+file = "grid.fci.nc"
+extrapolate_y = false
+
+[mesh:paralleltransform]
+type = fci
+y_periodic = false
+
+[mesh:paralleltransform:xzinterpolation]
+type = precomputed
