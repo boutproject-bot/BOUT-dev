@@ -62,6 +62,20 @@ int main(int argc, char** argv) {
   fci_op_test("div_par_K_grad_par", dump, input, Div_par_K_Grad_par(K, input));
   fci_op_test("div_par_K_grad_par_mod", dump, input,
               Div_par_K_Grad_par_mod(K, input, flow_ylow));
+  // Support-operator method (matrices from the grid file)
+  const Field3D som = Div_par_K_Grad_par_mod(K, input, flow_ylow, false,
+                                             bout::ConductionMethod::PetscOperator);
+  fci_op_test("div_par_K_grad_par_som", dump, input, som);
+  {
+    // Conservation in the physical volume dy * dagp_us_volume (field lines
+    // are closed: no parallel boundaries)
+    Field3D volume{mesh};
+    mesh->get(volume, "dagp_us_volume", 0.0, false);
+    volume *= mesh->getCoordinates()->dy();
+    dump["div_par_K_grad_par_som_integral"] =
+        mean(volume * som, true, "RGN_NOBNDRY")
+        / mean(volume * abs(som), true, "RGN_NOBNDRY");
+  }
   fci_op_test("laplace_par", dump, input, Laplace_par(input));
 
   // Finite volume methods

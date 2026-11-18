@@ -21,7 +21,8 @@ from time import time
 from boutdata.collect import collect
 from boututils.run_wrapper import build_and_log, launch_safe
 from numpy import abs as npabs
-from numpy import array, log, max as npmax, polyfit
+from numpy import array, log, polyfit
+from numpy import max as npmax
 from zoidberg.unstructured import make_test_grid
 
 # Global parameters
@@ -34,6 +35,7 @@ OPERATORS = (
     "div_par",
     "div_par_K_grad_par",
     "div_par_K_grad_par_mod",
+    "div_par_K_grad_par_som",
     "laplace_par",
     "FV_div_par_mod",
     "FV_div_par_fvv",
@@ -48,6 +50,15 @@ OPERATORS = (
 operator_order = {
     "FV_div_par_fvv": 1,
 }
+# The support-operator conduction is conservative but not locally consistent
+# on independently interpolated planes: its operator error does not decrease
+# with resolution (0.031, 0.031, 0.052, 0.089 for n = 8...64; the solution of
+# a diffusion problem still converges, at order 0.6-0.9; see the follow-up 4
+# report). Its order is reported, not asserted; the error must stay below
+# this bound (regression check).
+RECORD_ONLY = {"div_par_K_grad_par_som": 0.15}
+# Same for the cylindrical sheared case (set from the measured errors)
+RECORD_ONLY_CYL = {"div_par_K_grad_par_som": 0.3}
 # Resolution in y and z; the number of R layers is fixed (as NX is in ../fci)
 NLIST = [8, 16, 32, 64]
 dx = 1.0 / array(NLIST)
@@ -75,6 +86,10 @@ def assert_convergence(error, dx, name, expected) -> bool:
 
     order = log(error[-2] / error[-1]) / log(dx[-2] / dx[-1])
     print(f", {order:f} (small spacing)", end="")
+
+    if expected is None:
+        print("\t............ recorded")
+        return True
 
     # Should be close to the expected order
     success = order > expected * 0.95
@@ -161,6 +176,16 @@ def check_fci_operators(name: str, case: dict):
     final_errors = transpose(all_errors)
     for operator in OPERATORS:
         test_name = f"{operator} {name}"
+        if operator in RECORD_ONLY:
+            assert_convergence(final_errors[operator]["l_2"], dx, test_name, None)
+            bound = RECORD_ONLY[operator]
+            worst = max(final_errors[operator]["l_2"])
+            ok = worst < bound
+            print(f"{test_name} largest l-2 error {worst:.3e} < {bound}", end="")
+            print(f"\t............ {'PASS' if ok else 'FAIL'} (order not asserted)")
+            if not ok:
+                failures.append(test_name)
+            continue
         success = assert_convergence(
             final_errors[operator]["l_2"],
             dx,
@@ -186,7 +211,10 @@ def check_decomposition(cases: dict) -> list[str]:
             b = collect(f"{operator}_result", path=path, info=False, xguards=False)
             diff = npmax(npabs(a - b)) / npmax(npabs(a))
             ok = diff < 1e-12
-            print(f"{operator} {name} vs 1 rank: max relative difference {diff:.3e}", end="")
+            print(
+                f"{operator} {name} vs 1 rank: max relative difference {diff:.3e}",
+                end="",
+            )
             print(f"\t............ {'PASS' if ok else 'FAIL'}")
             if not ok:
                 failures.append(f"{operator} decomposition {name}")
@@ -229,6 +257,60 @@ def check_cylindrical() -> list[str]:
     return failures
 
 
+# Cylindrical case with a sheared field: parallel operators (see mms.py)
+CYLP_DIRECTORY = "data_cyl_sheared"
+CYLP_NLIST = [8, 16, 32]
+CYLP_OPERATORS = (
+    "grad_par",
+    "div_par_K_grad_par_mod",
+    "div_par_K_grad_par_som",
+)
+
+
+def check_cylindrical_sheared() -> list[str]:
+    errors = {operator: [] for operator in CYLP_OPERATORS}
+    failures = []
+    for n in CYLP_NLIST:
+        gridname = f"mesh_cyl_sheared.{n}.fci.nc"
+        make_test_grid("bout_mms_cyl_sheared", n, filename=gridname)
+        cmd = f"./fci_mms -d {CYLP_DIRECTORY} NXPE=1 mesh:file={gridname}"
+        print(f"Running command: {cmd}", end="")
+        start = time()
+        status, out = launch_safe(cmd, nproc=NPROC, mthread=MTHREAD, pipe=True)
+        print(f" ... done in {time() - start:.3}s")
+        pathlib.Path(CYLP_DIRECTORY, f"run.log.{n}").write_text(out)
+        if status:
+            print(f"Run failed!\nOutput was:\n{out}")
+            sys.exit(status)
+        for operator in CYLP_OPERATORS:
+            errors[operator].append(quiet_collect(f"{operator}_l_2", CYLP_DIRECTORY))
+        # Support-operator conservation in the physical volume (B5)
+        integral = abs(quiet_collect("div_par_K_grad_par_som_integral", CYLP_DIRECTORY))
+        ok = integral < 1e-12
+        print(
+            f"div_par_K_grad_par_som cylindrical sheared n={n}: relative physical-volume "
+            f"integral {integral:.3e}\t............ {'PASS' if ok else 'FAIL'}"
+        )
+        if not ok:
+            failures.append(f"div_par_K_grad_par_som conservation cylindrical n={n}")
+    spacing = 1.0 / array(CYLP_NLIST)
+    for operator in CYLP_OPERATORS:
+        name = f"{operator} cylindrical sheared"
+        if operator in RECORD_ONLY:
+            assert_convergence(errors[operator], spacing, name, None)
+            worst = max(errors[operator])
+            ok = worst < RECORD_ONLY_CYL[operator]
+            print(
+                f"{name} largest l-2 error {worst:.3e} < {RECORD_ONLY_CYL[operator]}"
+                f"\t............ {'PASS' if ok else 'FAIL'} (order not asserted)"
+            )
+            if not ok:
+                failures.append(name)
+        elif not assert_convergence(errors[operator], spacing, name, 2):
+            failures.append(name)
+    return failures
+
+
 def make_plots(cases: dict[str, dict]):
     try:
         import matplotlib.pyplot as plt
@@ -258,7 +340,9 @@ def make_plots(cases: dict[str, dict]):
 if __name__ == "__main__":
     build_and_log("FCI MMS test (unstructured)")
 
-    parser = argparse.ArgumentParser("Error scaling test for unstructured FCI operators")
+    parser = argparse.ArgumentParser(
+        "Error scaling test for unstructured FCI operators"
+    )
     parser.add_argument(
         "--make-plots", action="store_true", help="Create plots of error scaling"
     )
@@ -286,6 +370,7 @@ if __name__ == "__main__":
 
     failures.extend(check_decomposition(cases))
     failures.extend(check_cylindrical())
+    failures.extend(check_cylindrical_sheared())
 
     if args.dump_errors:
         pathlib.Path(args.dump_errors).write_text(json.dumps(cases))
