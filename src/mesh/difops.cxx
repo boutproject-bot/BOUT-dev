@@ -384,7 +384,7 @@ Field3D Div_par_K_Grad_par_mod_impl(const Field3DParallel& Kin,
     if constexpr (conduction_method == bout::ConductionMethod::PetscOperator) {
 #if BOUT_HAS_PETSC
       auto par = PetscOperators::Cache::getParallel(Kin.getMesh());
-      return par->Div_par_K_Grad_par(Kin, fin);
+      return par->Div_par_K_Grad_par(Kin, fin, bndry_flux);
 #else
       throw BoutException("BOUT++ was compiled without PETSc.");
 #endif

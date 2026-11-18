@@ -87,6 +87,14 @@ int main(int argc, char** argv) {
     dump["div_par_k_grad_par_orig"] = Div_par_K_Grad_par_mod(
         K, f_neumann, flow, false, bout::ConductionMethod::Original);
 
+    // Test5 : with a Dirichlet parallel boundary, bndry_flux = false removes
+    // the flux through the parallel boundaries (conservative), while
+    // bndry_flux = true keeps it
+    dump["div_par_k_grad_par_som_nobndry"] =
+        Div_par_K_Grad_par_mod(K, f, flow, false, bout::ConductionMethod::PetscOperator);
+    dump["div_par_k_grad_par_som_bndry"] =
+        Div_par_K_Grad_par_mod(K, f, flow, true, bout::ConductionMethod::PetscOperator);
+
     bout::writeDefaultOutputFile(dump);
   }
 

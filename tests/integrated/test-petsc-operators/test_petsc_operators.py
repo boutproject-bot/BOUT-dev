@@ -68,6 +68,20 @@ def analyse_path(path, plot=False, tol=1e-12):
             f"Div_par_K_Grad_par_mod(PetscOperator) has integral {som_int} > {tol}"
         )
 
+    # bndry_flux: no flux through parallel boundaries when false
+    nob = collect("div_par_k_grad_par_som_nobndry", path=path)
+    wb = collect("div_par_k_grad_par_som_bndry", path=path)
+    nob_int = np.sum((dV * nob)[2:-2, :, :])
+    wb_int = np.sum((dV * wb)[2:-2, :, :])
+    scale = np.sum(np.abs(dV * wb)[2:-2, :, :])
+    print(
+        f"Dirichlet boundary: integral with bndry_flux=False {nob_int:.3e}, True {wb_int:.3e}"
+    )
+    if np.abs(nob_int) > tol * max(1.0, scale):
+        raise ValueError(f"bndry_flux=False still has boundary flux {nob_int}")
+    if np.abs(wb_int) < 1e3 * tol * max(1.0, scale):
+        raise ValueError("Test grid has no parallel boundary flux to remove")
+
     if plot:
         import matplotlib.pyplot as plt
 

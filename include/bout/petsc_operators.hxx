@@ -25,6 +25,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -1018,6 +1019,11 @@ public:
     /// Weighted restriction from L- to C: I-^T * W-.
     PetscBackwardToCellOperator Restrict_plus;
 
+    /// 1 on interior legs, 0 on legs that end at a parallel boundary (L+)
+    PetscForwardLegVector Interior_plus;
+    /// 1 on interior legs, 0 on legs that end at a parallel boundary (L-)
+    PetscBackwardLegVector Interior_minus;
+
     /// @brief Compute the SOM parallel diffusion Div_par(K * Grad_par(f)).
     ///
     /// Evaluates the half-step fluxes separately on each side, multiplies by the
@@ -1026,8 +1032,13 @@ public:
     ///
     /// @param K Diffusion coefficient field; must have parallel slices allocated.
     /// @param f Field to differentiate; must have parallel slices allocated.
+    /// @param bndry_flux If false, the flux through parallel boundaries (legs
+    ///        ending at a boundary virtual cell) is set to zero, as in the
+    ///        original method with bndry_flux = false (e.g. when a sheath
+    ///        boundary condition removes the boundary heat flux separately).
     /// @returns Field3D containing Div_par(K * Grad_par(f)) at interior cells.
-    Field3D Div_par_K_Grad_par(const Field3D& K, const Field3D& f) const;
+    Field3D Div_par_K_Grad_par(const Field3D& K, const Field3D& f,
+                               bool bndry_flux = true) const;
   };
 
   /// @brief Assemble and return the full set of parallel SOM operators.
@@ -1132,6 +1143,28 @@ private:
       const int stored = local[i];
       x[i] = (stored >= 0 && stored < static_cast<int>(values.size())) ? values[stored]
                                                                        : 0.0;
+    }
+    BOUT_DO_PETSC(VecRestoreArray(out.raw(), &x));
+    return out;
+  }
+
+  /// @brief Mask over a leg space: 1 for interior legs, 0 for boundary legs.
+  template <typename LegVector>
+  LegVector interiorLegMask(const Field3D& boundary_leg_number,
+                            std::shared_ptr<const PetscLegMapping> mapping) const {
+    std::set<int> boundary;
+    cell_mapping->mapOwnedInteriorCells([&](PetscInt, const Ind3D& i, int) {
+      const int leg = ROUND(boundary_leg_number[i]);
+      if (leg >= 0) {
+        boundary.insert(leg);
+      }
+    });
+    LegVector out(mapping);
+    PetscScalar* x{nullptr};
+    BOUT_DO_PETSC(VecGetArray(out.raw(), &x));
+    const auto& local = mapping->localStoredIndices();
+    for (PetscInt i = 0; i < static_cast<PetscInt>(local.size()); ++i) {
+      x[i] = (boundary.count(local[i]) != 0) ? 0.0 : 1.0;
     }
     BOUT_DO_PETSC(VecRestoreArray(out.raw(), &x));
     return out;

@@ -416,18 +416,28 @@ PetscOperators::Parallel PetscOperators::getParallel() const {
 
                   std::move(Interp_minus), std::move(Interp_plus),
 
-                  std::move(Restrict_minus), std::move(Restrict_plus)};
+                  std::move(Restrict_minus), std::move(Restrict_plus),
+
+                  interiorLegMask<PetscForwardLegVector>(forward_leg_boundary_number,
+                                                         forward_leg_mapping),
+                  interiorLegMask<PetscBackwardLegVector>(backward_leg_boundary_number,
+                                                          backward_leg_mapping)};
 }
 
-Field3D PetscOperators::Parallel::Div_par_K_Grad_par(const Field3D& K,
-                                                     const Field3D& f) const {
+Field3D PetscOperators::Parallel::Div_par_K_Grad_par(const Field3D& K, const Field3D& f,
+                                                     bool bndry_flux) const {
   const auto grad_plus = Grad_plus(f);
   const auto grad_minus = Grad_minus(f);
   const auto K_plus = Interp_plus(K);
   const auto K_minus = Interp_minus(K);
 
-  const auto flux_plus = PetscForwardLegVector::pointwiseMultiply(K_plus, grad_plus);
-  const auto flux_minus = PetscBackwardLegVector::pointwiseMultiply(K_minus, grad_minus);
+  auto flux_plus = PetscForwardLegVector::pointwiseMultiply(K_plus, grad_plus);
+  auto flux_minus = PetscBackwardLegVector::pointwiseMultiply(K_minus, grad_minus);
+  if (not bndry_flux) {
+    // No flux through the parallel boundaries
+    flux_plus = PetscForwardLegVector::pointwiseMultiply(flux_plus, Interior_plus);
+    flux_minus = PetscBackwardLegVector::pointwiseMultiply(flux_minus, Interior_minus);
+  }
 
   const auto div_minus = Div_minus(flux_plus);
   const auto div_plus = Div_plus(flux_minus);
