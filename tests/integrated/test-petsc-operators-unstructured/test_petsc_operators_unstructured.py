@@ -6,7 +6,9 @@
 #   bndry_flux = true (the full boundary flux enters and leaves), and with
 #   bndry_flux = false it is -1/dl and +1/dl at the cells next to the upper
 #   and lower walls (the flux through the walls is removed);
-# * the assembled Div_par_Grad_par equals the bndry_flux = true result.
+# * the assembled Div_par_Grad_par equals the bndry_flux = true result;
+# * with a variable coefficient and bndry_flux = false, the integral of the
+#   divergence in the physical volume dy * dagp_us_volume vanishes.
 #
 # Run on 1 rank and on 2 ranks (split in y, so that the walls are on
 # different ranks).
@@ -58,6 +60,11 @@ def check(path):
         )
         / scale,
     }
+    div_v = get("div_variable")
+    checks["variable K: physical volume integral (bndry_flux = false)"] = abs(
+        np.sum(dyV * div_v)
+    ) / np.sum(np.abs(dyV * div_v))
+
     failures = []
     for name, value in checks.items():
         ok = value < 1e-10

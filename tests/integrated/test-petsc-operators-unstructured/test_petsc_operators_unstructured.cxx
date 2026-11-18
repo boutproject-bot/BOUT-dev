@@ -54,6 +54,15 @@ int main(int argc, char** argv) {
     dump["div_bndry"] = par->Div_par_K_Grad_par(K, f, true);
     dump["div_nobndry"] = par->Div_par_K_Grad_par(K, f, false);
     dump["laplace_par"] = par->Div_par_Grad_par(f);
+
+    // Variable coefficient, Neumann boundaries: with bndry_flux = false the
+    // physical volume integral of the divergence vanishes
+    Field3D Kv = FieldFactory::get()->create3D("K_variable", Options::getRoot(), mesh);
+    Field3D g = FieldFactory::get()->create3D("g", Options::getRoot(), mesh);
+    mesh->communicate(Kv, g);
+    Kv.applyParallelBoundary("parallel_neumann_o1");
+    g.applyParallelBoundary("parallel_neumann_o1");
+    dump["div_variable"] = par->Div_par_K_Grad_par(Kv, g, false);
     bout::writeDefaultOutputFile(dump);
   }
 

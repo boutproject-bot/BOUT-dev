@@ -8,6 +8,14 @@ f = 10 * y / (2 * pi)
 # cells (dl = 0.625), used as boundary value there
 f_wall = 10 * y / (2 * pi) + 0.3125 * (2 * H(y - pi) - 1)
 
+# Variable coefficient and profile for the conservation check
+K_variable = 1 + 0.5 * sin(y) * cos(6.283185307179586 * gridvar:Z)
+g = sin(y) + cos(6.283185307179586 * gridvar:Z) * gridvar:R
+
+[input:grid_variables]
+R = field3d
+Z = field3d
+
 [mesh]
 file = "grid.fci.nc"
 extrapolate_y = false
