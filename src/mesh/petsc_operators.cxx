@@ -342,6 +342,12 @@ PetscOperators::Parallel PetscOperators::getParallel() const {
   // Cell volume
   Field3D dV =
       Coordinates::FieldMetric{coords->J() * coords->dx() * coords->dy() * coords->dz()};
+  if (mesh->isUnstructured() and mesh->sourceHasVar("dagp_us_volume")) {
+    // Unstructured grids use dx = dz = 1: the poloidal area of each node
+    // (its dual cell) is stored separately. Without it the operators would
+    // conserve sum(J dy f) instead of the physical integral.
+    dV *= meshGetField3D(mesh, "dagp_us_volume");
+  }
   dV.splitParallelSlices();
   dV.yup() = 0.0;
   dV.ydown() = 0.0;
