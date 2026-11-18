@@ -400,7 +400,7 @@ void PvodeSolver::add_tracking_post(std::shared_ptr<Options> tracking) {
       evolve_bndrys.push_back(f.evolve_bndry);
     }
     pvode_load_data_f3d(evolve_bndrys, list_of_fields,
-                        prefix == "post_"s ? udata : N_VDATA(cv_mem->cv_acor));
+                        prefix == "pre_"s ? udata : N_VDATA(cv_mem->cv_acor));
   }
 }
 
