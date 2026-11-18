@@ -633,9 +633,7 @@ Field3D PetscOperators::computeYdown(const Field3D& f) const {
 
 std::shared_ptr<PetscOperators> PetscOperators::Cache::get(Mesh* mesh) {
   if (auto search = petscOp.find(mesh); search != petscOp.end()) {
-    if (std::shared_ptr<PetscOperators> spt = search->second.lock()) {
-      return spt;
-    }
+    return search->second;
   }
   auto op = std::make_shared<PetscOperators>(mesh);
   petscOp[mesh] = op;
@@ -644,14 +642,23 @@ std::shared_ptr<PetscOperators> PetscOperators::Cache::get(Mesh* mesh) {
 
 std::shared_ptr<PetscOperators::Parallel> PetscOperators::Cache::getParallel(Mesh* mesh) {
   if (auto search = parOp.find(mesh); search != parOp.end()) {
-    if (std::shared_ptr<PetscOperators::Parallel> spt = search->second.lock()) {
-      return spt;
-    }
+    return search->second;
   }
   auto op = get(mesh);
   auto par = std::make_shared<PetscOperators::Parallel>(op->getParallel());
   parOp[mesh] = par;
   return par;
+}
+
+void PetscOperators::Cache::release(Mesh* mesh) {
+  // The Parallel operators are derived from the PetscOperators: release first
+  parOp.erase(mesh);
+  petscOp.erase(mesh);
+}
+
+void PetscOperators::Cache::cleanup() {
+  parOp.clear();
+  petscOp.clear();
 }
 
 void PetscOperators::computeParallelSlices(Field3D& f) const {
@@ -719,6 +726,6 @@ void PetscOperators::computeParallelSlices(Field3D& f) const {
   BOUT_DO_PETSC(VecRestoreArrayRead(w_minus.raw(), &wm));
 }
 
-std::map<Mesh*, std::weak_ptr<PetscOperators::Parallel>> PetscOperators::Cache::parOp;
-std::map<Mesh*, std::weak_ptr<PetscOperators>> PetscOperators::Cache::petscOp;
+std::map<Mesh*, std::shared_ptr<PetscOperators::Parallel>> PetscOperators::Cache::parOp;
+std::map<Mesh*, std::shared_ptr<PetscOperators>> PetscOperators::Cache::petscOp;
 #endif

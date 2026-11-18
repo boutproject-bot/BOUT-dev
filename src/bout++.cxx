@@ -55,6 +55,7 @@ static constexpr auto DEFAULT_DIR = "data";
 #include "bout/openmpwrap.hxx"
 #include "bout/optionsreader.hxx"
 #include "bout/output.hxx"
+#include "bout/petsc_operators.hxx"
 #include "bout/petsclib.hxx"
 #include "bout/revision.hxx"
 #include "bout/rkscheme.hxx"
@@ -788,6 +789,11 @@ int BoutFinalise(bool write_settings) {
 
   // Call SlepcFinalize if not already called
   SlepcLib::cleanup();
+
+#if BOUT_HAS_PETSC
+  // Release cached PETSc operators before PetscFinalize
+  PetscOperators::Cache::cleanup();
+#endif
 
   // Call PetscFinalize if not already called
   PetscLib::cleanup();

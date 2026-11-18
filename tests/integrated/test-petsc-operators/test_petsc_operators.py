@@ -2,10 +2,10 @@ import pathlib
 import shutil
 import subprocess
 import sys
-import numpy as np
 
-from boututils.run_wrapper import build_and_log, launch_safe
+import numpy as np
 from boutdata import collect
+from boututils.run_wrapper import build_and_log, launch_safe
 
 
 def analyse_path(path, plot=False, tol=1e-12):
@@ -40,6 +40,32 @@ def analyse_path(path, plot=False, tol=1e-12):
     if np.abs(op_div2_int) > tol:
         raise ValueError(
             f"Div_par_Grad_par operator has integral {op_div2_int} > {tol}"
+        )
+
+    # Operators cached between calls (not rebuilt)
+    reused = int(collect("cache_reused", path=path))
+    t_first = float(collect("cache_time_first", path=path))
+    t_second = float(collect("cache_time_second", path=path))
+    print(
+        f"Parallel operator cache: reused {reused}, first {t_first:.3g} s, second {t_second:.3g} s"
+    )
+    if reused != 1:
+        raise ValueError("PetscOperators::Cache rebuilt the parallel operators")
+    if t_second > 0.01 * t_first:
+        raise ValueError(f"Cached request took {t_second} s (first {t_first} s)")
+
+    # Variable-coefficient conduction: the support-operator method conserves
+    som = collect("div_par_k_grad_par_som", path=path)
+    orig = collect("div_par_k_grad_par_orig", path=path)
+    som_int = np.sum((dV * som)[2:-2, :, :])
+    orig_int = np.sum((dV * orig)[2:-2, :, :])
+    scale = np.sum(np.abs(dV * som)[2:-2, :, :])
+    print(
+        f"Div_par_K_Grad_par_mod volume integral: petscoperator {som_int:.3e}, original {orig_int:.3e} (scale {scale:.3e})"
+    )
+    if np.abs(som_int) > tol * max(1.0, scale):
+        raise ValueError(
+            f"Div_par_K_Grad_par_mod(PetscOperator) has integral {som_int} > {tol}"
         )
 
     if plot:
@@ -129,7 +155,10 @@ def check_decomposition(reference, path, rtol=1e-12):
         b = collect(name, path=path, info=False)
         # Compare away from the X boundaries, as in analyse_path
         np.testing.assert_allclose(
-            b[2:-2], a[2:-2], rtol=rtol, atol=rtol * np.max(np.abs(a[2:-2])),
+            b[2:-2],
+            a[2:-2],
+            rtol=rtol,
+            atol=rtol * np.max(np.abs(a[2:-2])),
             err_msg=f"{name} differs between {reference} and {path}",
         )
 

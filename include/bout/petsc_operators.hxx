@@ -1041,14 +1041,24 @@ public:
   /// @returns A @ref Parallel struct containing all assembled operators.
   Parallel getParallel() const;
 
+  /// Per-mesh cache of the operators, so that they are assembled once.
+  ///
+  /// The cache owns the operators (callers such as Div_par_K_Grad_par_mod
+  /// only hold them for one call). The entries of a mesh are released when
+  /// the mesh is destroyed (Mesh::~Mesh), and all entries in BoutFinalise
+  /// before PetscFinalize, so no PETSc object outlives PETSc.
   class Cache {
   public:
     static std::shared_ptr<PetscOperators> get(Mesh* mesh);
     static std::shared_ptr<PetscOperators::Parallel> getParallel(Mesh* mesh);
+    /// Release the operators of @p mesh (called by Mesh::~Mesh)
+    static void release(Mesh* mesh);
+    /// Release all cached operators (called by BoutFinalise)
+    static void cleanup();
 
   private:
-    static std::map<Mesh*, std::weak_ptr<PetscOperators>> petscOp;
-    static std::map<Mesh*, std::weak_ptr<PetscOperators::Parallel>> parOp;
+    static std::map<Mesh*, std::shared_ptr<PetscOperators>> petscOp;
+    static std::map<Mesh*, std::shared_ptr<PetscOperators::Parallel>> parOp;
   };
 
 private:
