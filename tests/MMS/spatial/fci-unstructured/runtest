@@ -373,6 +373,39 @@ def check_cylindrical_sheared() -> list[str]:
     return failures
 
 
+# Isotropic family (zoidberg "bout_mms_iso"): same geometry, field and
+# manufactured solution as the main case, but nR = n/8 and jitter in R and Z,
+# so that the plane mesh is isotropic at every resolution (the main family
+# keeps nR = 8 and goes from anisotropic to isotropic within n = 8...64).
+# Orders are recorded, not asserted (follow-up: decide thresholds).
+ISO_DIRECTORY = "data_iso"
+ISO_NLIST = [32, 48, 64]
+
+
+def check_isotropic() -> dict:
+    pathlib.Path(ISO_DIRECTORY).mkdir(exist_ok=True)
+    shutil.copy(pathlib.Path(DIRECTORY) / "BOUT.inp", ISO_DIRECTORY)
+    errors = {operator: [] for operator in OPERATORS}
+    for n in ISO_NLIST:
+        gridname = f"mesh_iso.{n}.fci.nc"
+        make_test_grid("bout_mms_iso", n, filename=gridname)
+        cmd = f"./fci_mms -d {ISO_DIRECTORY} NXPE=1 mesh:file={gridname}"
+        print(f"Running command: {cmd}", end="")
+        start = time()
+        status, out = launch_safe(cmd, nproc=NPROC, mthread=MTHREAD, pipe=True)
+        print(f" ... done in {time() - start:.3}s")
+        pathlib.Path(ISO_DIRECTORY, f"run.log.{n}").write_text(out)
+        if status:
+            print(f"Run failed!\nOutput was:\n{out}")
+            sys.exit(status)
+        for operator in OPERATORS:
+            errors[operator].append(quiet_collect(f"{operator}_l_2", ISO_DIRECTORY))
+    spacing = 1.0 / array(ISO_NLIST)
+    for operator in OPERATORS:
+        assert_convergence(errors[operator], spacing, f"{operator} isotropic", None)
+    return {"n": ISO_NLIST, **{op: {"l_2": e} for op, e in errors.items()}}
+
+
 def make_plots(cases: dict[str, dict]):
     try:
         import matplotlib.pyplot as plt
@@ -437,9 +470,12 @@ if __name__ == "__main__":
     failures.extend(check_decomposition(cases))
     failures.extend(check_cylindrical())
     failures.extend(check_cylindrical_sheared())
+    isotropic = check_isotropic()
 
     if args.dump_errors:
-        pathlib.Path(args.dump_errors).write_text(json.dumps(cases))
+        pathlib.Path(args.dump_errors).write_text(
+            json.dumps({**cases, "isotropic nR=n/8 (record only)": isotropic})
+        )
 
     if args.make_plots:
         make_plots(cases)
