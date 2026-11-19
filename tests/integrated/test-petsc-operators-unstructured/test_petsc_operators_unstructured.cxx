@@ -22,15 +22,19 @@ int main(int argc, char** argv) {
     using bout::globals::mesh;
     const auto par = PetscOperators::Cache::getParallel(mesh);
 
-    // f linear along the (straight) field lines. The boundary values (at the
-    // walls, half a cell beyond the last cells) are passed as a field fb whose
-    // value in each boundary cell is f at its wall. (The expression form of
-    // the boundary condition evaluates expressions at an integer y index.)
+    // f linear along the (straight) field lines, with its values at the
+    // walls (half a cell beyond the last cells) as boundary values, set in
+    // three ways that must agree:
+    //  - fb: field values (f at the nearest wall in each boundary cell) through
+    //    BoundaryFactory + clone for every parallel region;
+    //  - f_label: the same field values through the label-based
+    //    Field3D::applyParallelBoundary (labels are not unique);
+    //  - f_expr: the expression form, evaluated at the boundary point.
     Field3D f = FieldFactory::get()->create3D("f", Options::getRoot(), mesh);
     Field3D fb = FieldFactory::get()->create3D("f_wall", Options::getRoot(), mesh);
     mesh->communicate(f);
-    // (Field3D::applyParallelBoundary(region, condition, field) selects regions
-    // by label, which is not unique here)
+    Field3D f_label = copy(f);
+    Field3D f_expr = copy(f);
     auto* factory = BoundaryFactory::getInstance();
     for (const auto& region : mesh->getBoundariesPar()) {
       const std::unique_ptr<BoundaryOpPar> tmp{
@@ -38,6 +42,10 @@ int main(int argc, char** argv) {
       const std::unique_ptr<BoundaryOpPar> op{tmp->clone(region.get(), &fb)};
       op->apply(f);
     }
+    for (const std::string label : {"FCI_forward", "FCI_backward"}) {
+      f_label.applyParallelBoundary(label, "parallel_dirichlet_o2", &fb);
+    }
+    f_expr.applyParallelBoundary("parallel_dirichlet_o2(10 * y / (2 * pi))");
 
     Field3D K{1.0, mesh};
     mesh->communicate(K);
@@ -54,6 +62,8 @@ int main(int argc, char** argv) {
     dump["div_bndry"] = par->Div_par_K_Grad_par(K, f, true);
     dump["div_nobndry"] = par->Div_par_K_Grad_par(K, f, false);
     dump["laplace_par"] = par->Div_par_Grad_par(f);
+    dump["div_bndry_label"] = par->Div_par_K_Grad_par(K, f_label, true);
+    dump["div_bndry_expr"] = par->Div_par_K_Grad_par(K, f_expr, true);
 
     // Variable coefficient, Neumann boundaries: with bndry_flux = false the
     // physical volume integral of the divergence vanishes

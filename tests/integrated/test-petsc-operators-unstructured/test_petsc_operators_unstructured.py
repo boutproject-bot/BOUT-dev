@@ -8,7 +8,11 @@
 #   and lower walls (the flux through the walls is removed);
 # * the assembled Div_par_Grad_par equals the bndry_flux = true result;
 # * with a variable coefficient and bndry_flux = false, the integral of the
-#   divergence in the physical volume dy * dagp_us_volume vanishes.
+#   divergence in the physical volume dy * dagp_us_volume vanishes;
+# * the boundary values give the same result when set through the
+#   label-based Field3D::applyParallelBoundary (the labels FCI_forward and
+#   FCI_backward each name two regions) and in expression form (evaluated at
+#   the real boundary position on unstructured meshes).
 #
 # Run on 1 rank and on 2 ranks (split in y, so that the walls are on
 # different ranks).
@@ -60,6 +64,12 @@ def check(path):
         )
         / scale,
     }
+    checks["boundary values by label (non-unique labels): divergence zero"] = (
+        np.max(np.abs(get("div_bndry_label"))) / scale
+    )
+    checks["expression boundary values at the boundary point: divergence zero"] = (
+        np.max(np.abs(get("div_bndry_expr"))) / scale
+    )
     div_v = get("div_variable")
     checks["variable K: physical volume integral (bndry_flux = false)"] = abs(
         np.sum(dyV * div_v)

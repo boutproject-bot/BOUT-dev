@@ -8,12 +8,34 @@
 #include "bout/mesh.hxx"
 #include "bout/output.hxx"
 
+#include <cmath>
+
 BoutReal BoundaryOpPar::getValue(const bout::boundary::BoundaryRegionFCI::Point& bndry,
                                  BoutReal t) {
   switch (value_type) {
-  case ValueType::GEN:
-    return gen_values->generate(bout::generator::Context(
-        bndry.s_x(), bndry.s_y(), bndry.s_z(), CELL_CENTRE, bndry.localmesh(), t));
+  case ValueType::GEN: {
+    Mesh* mesh = bndry.localmesh();
+    bout::generator::Context context(bndry.s_x(), bndry.s_y(), bndry.s_z(), CELL_CENTRE,
+                                     mesh, t);
+    if (!unstructured.has_value()) {
+      unstructured = mesh->isUnstructured();
+    }
+    if (*unstructured) {
+      // The boundary point is at a real y index, half a cell beyond the last
+      // cell; the integer Context truncates it (to the cell itself or to its
+      // neighbour). Interpolate y to the real index instead. (Structured
+      // meshes keep the previous behaviour.)
+      // Use the boundary cell and its interior neighbour (both real cells:
+      // GlobalY of a guard index can wrap around on periodic meshes)
+      const BoutReal s_y = bndry.s_y();
+      const int iy_cell = bndry.ind().y();
+      const int iy_inner = (s_y > iy_cell) ? iy_cell - 1 : iy_cell + 1;
+      const BoutReal y_cell = mesh->GlobalY(iy_cell);
+      const BoutReal slope = (y_cell - mesh->GlobalY(iy_inner)) / (iy_cell - iy_inner);
+      context.set("y", TWOPI * (y_cell + slope * (s_y - iy_cell)));
+    }
+    return gen_values->generate(context);
+  }
   case ValueType::FIELD:
     // FIXME: Interpolate to s_x, s_y, s_z...
     return (*field_values)[bndry.ind()];

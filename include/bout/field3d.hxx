@@ -655,6 +655,8 @@ public:
   void applyParallelBoundary() override;
   void applyParallelBoundary(BoutReal t) override;
   void applyParallelBoundary(const std::string& condition) override;
+  /// Apply @p condition to every parallel boundary region labelled @p region
+  /// (labels need not be unique)
   void applyParallelBoundary(const std::string& region,
                              const std::string& condition) override;
   void applyParallelBoundary(const std::string& region, const std::string& condition,
