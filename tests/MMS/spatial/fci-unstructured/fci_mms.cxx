@@ -9,7 +9,12 @@
 #include "bout/options.hxx"
 #include "bout/options_io.hxx"
 #include "bout/petsc_operators.hxx"
+#include "bout/petsclib.hxx"
+
+#include <petscksp.h>
+
 #include "bout/utils.hxx"
+#include <array>
 
 #include <fmt/format.h>
 
@@ -36,6 +41,99 @@ auto fci_op_test(const std::string& name, Options& dump, const Field3D& input,
     dump[fmt::format("{}_input.ynext(-{})", name, slice)] = input.ynext(-slice);
     dump[fmt::format("{}_input.ynext({})", name, slice)] = input.ynext(slice);
   }
+}
+
+/// Solution error of a steady diffusion problem with the parallel conduction
+/// operator L (K = 1): (I - c L) f = S, S manufactured from the exact f. As L
+/// is linear, the error delta = f_h - f solves (I - c L) delta = c e, where
+/// e = L f - L_exact f is the operator error. Solved with GMRES on the
+/// interior cells (matrix-free, the production operator in every product).
+struct SolveContext {
+  Mesh* mesh;
+  bout::ConductionMethod method;
+  BoutReal c;
+  Field3D K;
+};
+
+void unpack(const PetscScalar* x, Field3D& f) {
+  int i = 0;
+  BOUT_FOR_SERIAL(ind, f.getRegion("RGN_NOBNDRY")) { f[ind] = x[i++]; }
+}
+
+void pack(const Field3D& f, PetscScalar* x) {
+  int i = 0;
+  BOUT_FOR_SERIAL(ind, f.getRegion("RGN_NOBNDRY")) { x[i++] = f[ind]; }
+}
+
+PetscErrorCode applyShell(Mat A, Vec x, Vec y) {
+  SolveContext* ctx{nullptr};
+  PetscCall(MatShellGetContext(A, &ctx));
+  Field3D f{0.0, ctx->mesh};
+  const PetscScalar* xa{nullptr};
+  PetscCall(VecGetArrayRead(x, &xa));
+  unpack(xa, f);
+  PetscCall(VecRestoreArrayRead(x, &xa));
+  ctx->mesh->communicate(f);
+  Field3D flow;
+  const Field3D Lf = Div_par_K_Grad_par_mod(ctx->K, f, flow, false, ctx->method);
+  const Field3D result = f - ctx->c * Lf;
+  PetscScalar* ya{nullptr};
+  PetscCall(VecGetArray(y, &ya));
+  pack(result, ya);
+  PetscCall(VecRestoreArray(y, &ya));
+  return PETSC_SUCCESS;
+}
+
+/// Returns {rms(delta), GMRES iterations, converged (1/0)}
+std::array<BoutReal, 3> solutionError(Mesh* mesh, bout::ConductionMethod method,
+                                      BoutReal c, const Field3D& operator_error) {
+  const PetscLib lib;
+  Field3D K{1.0, mesh};
+  mesh->communicate(K);
+  SolveContext ctx{mesh, method, c, K};
+  const auto n_local = static_cast<PetscInt>(mesh->getRegion3D("RGN_NOBNDRY").size());
+
+  Vec b{nullptr};
+  Vec delta{nullptr};
+  BOUT_DO_PETSC(VecCreateMPI(BoutComm::get(), n_local, PETSC_DETERMINE, &b));
+  BOUT_DO_PETSC(VecDuplicate(b, &delta));
+  PetscScalar* ba{nullptr};
+  BOUT_DO_PETSC(VecGetArray(b, &ba));
+  pack(c * operator_error, ba);
+  BOUT_DO_PETSC(VecRestoreArray(b, &ba));
+
+  Mat A{nullptr};
+  BOUT_DO_PETSC(MatCreateShell(BoutComm::get(), n_local, n_local, PETSC_DETERMINE,
+                               PETSC_DETERMINE, &ctx, &A));
+  BOUT_DO_PETSC(
+      MatShellSetOperation(A, MATOP_MULT, reinterpret_cast<void (*)(void)>(applyShell)));
+  KSP ksp{nullptr};
+  BOUT_DO_PETSC(KSPCreate(BoutComm::get(), &ksp));
+  BOUT_DO_PETSC(KSPSetOperators(ksp, A, A));
+  BOUT_DO_PETSC(KSPSetType(ksp, KSPGMRES));
+  BOUT_DO_PETSC(KSPGMRESSetRestart(ksp, 300));
+  PC pc{nullptr};
+  BOUT_DO_PETSC(KSPGetPC(ksp, &pc));
+  BOUT_DO_PETSC(PCSetType(pc, PCNONE));
+  BOUT_DO_PETSC(KSPSetTolerances(ksp, 1e-10, 1e-50, 1e10, 20000));
+  BOUT_DO_PETSC(KSPSolve(ksp, b, delta));
+  PetscInt its{0};
+  KSPConvergedReason reason{};
+  BOUT_DO_PETSC(KSPGetIterationNumber(ksp, &its));
+  BOUT_DO_PETSC(KSPGetConvergedReason(ksp, &reason));
+
+  Field3D d{0.0, mesh};
+  const PetscScalar* da{nullptr};
+  BOUT_DO_PETSC(VecGetArrayRead(delta, &da));
+  unpack(da, d);
+  BOUT_DO_PETSC(VecRestoreArrayRead(delta, &da));
+  const BoutReal rms = sqrt(mean(SQ(d), true, "RGN_NOBNDRY"));
+
+  BOUT_DO_PETSC(KSPDestroy(&ksp));
+  BOUT_DO_PETSC(MatDestroy(&A));
+  BOUT_DO_PETSC(VecDestroy(&b));
+  BOUT_DO_PETSC(VecDestroy(&delta));
+  return {rms, static_cast<BoutReal>(its), reason > 0 ? 1.0 : 0.0};
 }
 } // namespace
 
@@ -97,6 +195,33 @@ int main(int argc, char** argv) {
 #else
     throw BoutException("The support operators need PETSc");
 #endif
+  }
+
+  // Solution error of (I - c L) f = S for both conduction methods (K = 1)
+  for (const auto& c_string : strsplit(
+           Options::root()["solve_c"]
+               .doc("Comma-separated diffusion strengths c of the solution-error test")
+               .withDefault<std::string>(""),
+           ',')) {
+    if (trim(c_string).empty()) {
+      continue;
+    }
+    const BoutReal c = stringToReal(trim(c_string));
+    const Field3D exact{
+        FieldFactory::get()->create3D("laplace_par_solution", Options::getRoot(), mesh)};
+    Field3D one{1.0, mesh};
+    mesh->communicate(one);
+    for (const auto& [label, method] :
+         {std::pair{"orig", bout::ConductionMethod::Original},
+          std::pair{"som", bout::ConductionMethod::PetscOperator}}) {
+      const Field3D e =
+          Div_par_K_Grad_par_mod(one, input, flow_ylow, false, method) - exact;
+      const auto [rms, its, ok] = solutionError(mesh, method, c, e);
+      const std::string key = fmt::format("solve_{}_c{:g}", label, c);
+      dump[key + "_error"] = rms;
+      dump[key + "_iterations"] = its;
+      dump[key + "_converged"] = ok;
+    }
   }
 
   {

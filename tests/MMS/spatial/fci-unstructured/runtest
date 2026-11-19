@@ -163,6 +163,35 @@ def run_fci_operators(nz: int, args: str) -> dict[str, dict[str, float]]:
     }
 
 
+# Solution error of the steady problem (I - c L) f = S with the parallel
+# conduction operator L (K = 1), for both methods (see fci_mms.cxx). Original
+# must converge at second order; the support operator converges slowly on
+# these meshes (order 0.7 for c = 1, 1.4 for c = 100 at the finest step), so
+# its errors are bounded (about 1.5x the measured largest error), not its
+# order asserted.
+SOLVE_C = (1, 100)
+SOLVE_KEYS = [f"solve_{m}_c{c}" for c in SOLVE_C for m in ("orig", "som")]
+SOLVE_BOUNDS = {"solve_som_c1": 0.03, "solve_som_c100": 0.5}
+
+
+def check_solution_errors(errors: dict[str, list[float]]) -> list[str]:
+    failures = []
+    for key, values in errors.items():
+        print(f"{key} solution errors: " + ", ".join(f"{v:.3e}" for v in values))
+        if key in SOLVE_BOUNDS:
+            assert_convergence(values, dx, key, None)
+            ok = max(values) < SOLVE_BOUNDS[key]
+            print(
+                f"{key} largest error {max(values):.3e} < {SOLVE_BOUNDS[key]}", end=""
+            )
+            print(f"\t............ {'PASS' if ok else 'FAIL'} (order not asserted)")
+        else:
+            ok = assert_convergence(values, dx, key, 2)
+        if not ok:
+            failures.append(key)
+    return failures
+
+
 def transpose(
     errors: list[dict[str, dict[str, float]]],
 ) -> dict[str, dict[str, list[float]]]:
@@ -180,10 +209,16 @@ def transpose(
 def check_fci_operators(name: str, case: dict):
     failures = []
     all_errors = []
+    solve_errors = {key: [] for key in SOLVE_KEYS}
 
     for n in NLIST:
         errors = run_fci_operators(n, case["args"])
         all_errors.append(errors)
+        if case.get("solve"):
+            for key in SOLVE_KEYS:
+                solve_errors[key].append(quiet_collect(f"{key}_error"))
+                if quiet_collect(f"{key}_converged") != 1:
+                    failures.append(f"{key} GMRES not converged n={n}")
         if not conservation():
             failures.append(f"FV_div_a_grad_perp conservation {name} n={n}")
 
@@ -213,6 +248,10 @@ def check_fci_operators(name: str, case: dict):
         )
         if not success:
             failures.append(test_name)
+
+    if case.get("solve"):
+        failures.extend(check_solution_errors(solve_errors))
+        final_errors["solution_errors"] = solve_errors
 
     return final_errors, failures
 
@@ -380,7 +419,11 @@ if __name__ == "__main__":
     failures = []
     # NPROC = 2 ranks, split either along the nodes (x) or along y
     cases = {
-        "nslice=1 precomputed NXPE=2": {"order": 2, "args": "NXPE=2"},
+        "nslice=1 precomputed NXPE=2": {
+            "order": 2,
+            "args": f"NXPE=2 solve_c={','.join(str(c) for c in SOLVE_C)}",
+            "solve": True,
+        },
         "nslice=1 precomputed NYPE=2": {"order": 2, "args": "NXPE=1"},
     }
 
