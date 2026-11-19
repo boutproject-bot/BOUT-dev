@@ -390,10 +390,6 @@ Field3D Div_par_K_Grad_par_mod_impl(const Field3DParallel& Kin,
 #endif
     }
 
-    if constexpr (conduction_method != bout::ConductionMethod::Original) {
-      throw BoutException("Only bout::ConductionMethod::Original is supported for FCI");
-    }
-
     const auto& K_up = Kin.yup();
     const auto& K_down = Kin.ydown();
 
@@ -541,6 +537,10 @@ Field3D Div_par_K_Grad_par_mod_impl(const Field3DParallel& Kin,
   // Shifted to field aligned coordinates, so need to shift back
   result = fromFieldAligned(result, "RGN_NOBNDRY");
   flow_ylow = fromFieldAligned(flow_ylow);
+
+#if CHECK > 2
+  bout::checkFinite(result);
+#endif
 
   return result;
 }
