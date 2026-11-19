@@ -195,6 +195,10 @@ def check_fci_operators(name: str, case: dict) -> bool:
 # cases above unchanged.
 SO_OPERATORS = ("so_grad_par", "so_div_par", "so_laplace_par", "so_div_par_K_grad_par")
 SO_ORDER = 2
+# Standard operators with the precomputed XZ interpolation (the one used on
+# unstructured grids) on the same grids: single-sample legs must reach the
+# order of the Hermite spline
+PRECOMPUTED_OPERATORS = ("grad_par", "div_par", "laplace_par", "div_par_K_grad_par")
 
 
 def make_so_grid(nz: int):
@@ -218,23 +222,39 @@ def make_so_grid(nz: int):
 
 def check_support_operators():
     errors = {operator: [] for operator in SO_OPERATORS}
+    errors.update({f"precomputed_{op}": [] for op in PRECOMPUTED_OPERATORS})
     for nz in NLIST:
         make_so_grid(nz)
-        cmd = f"./fci_mms MYG=1 support_operators=true mesh:file=mesh_so.{nz}.fci.nc"
-        print(f"Running command: {cmd}", end="")
-        start = time()
-        status, out = launch_safe(cmd, nproc=NPROC, mthread=MTHREAD, pipe=True)
-        print(f" ... done in {time() - start:.3}s")
-        pathlib.Path(f"run_so.log.{nz}").write_text(out)
-        if status:
-            print(f"Run failed!\nOutput was:\n{out}")
-            sys.exit(status)
-        for operator in SO_OPERATORS:
-            errors[operator].append(quiet_collect(f"{operator}_l_2"))
+        for tag, extra, operators, prefix in (
+            ("so", "support_operators=true", SO_OPERATORS, ""),
+            (
+                "precomputed",
+                "mesh:paralleltransform:xzinterpolation:type=precomputed",
+                PRECOMPUTED_OPERATORS,
+                "precomputed_",
+            ),
+        ):
+            cmd = f"./fci_mms MYG=1 {extra} mesh:file=mesh_so.{nz}.fci.nc"
+            print(f"Running command: {cmd}", end="")
+            start = time()
+            status, out = launch_safe(cmd, nproc=NPROC, mthread=MTHREAD, pipe=True)
+            print(f" ... done in {time() - start:.3}s")
+            pathlib.Path(f"run_{tag}.log.{nz}").write_text(out)
+            if status:
+                print(f"Run failed!\nOutput was:\n{out}")
+                sys.exit(status)
+            for operator in operators:
+                errors[prefix + operator].append(quiet_collect(f"{operator}_l_2"))
     failures = []
     for operator in SO_OPERATORS:
         name = f"{operator} structured support operator"
         if not assert_convergence(errors[operator], dx, name, SO_ORDER):
+            failures.append(name)
+    for operator in PRECOMPUTED_OPERATORS:
+        name = f"{operator} structured precomputed interpolation"
+        if not assert_convergence(
+            errors[f"precomputed_{operator}"], dx, name, SO_ORDER
+        ):
             failures.append(name)
     return errors, failures
 
