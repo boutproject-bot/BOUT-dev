@@ -8,12 +8,15 @@
 #include "bout/coordinates.hxx"
 #include "bout/field2d.hxx"
 #include "bout/field3d.hxx"
+#include "bout/output.hxx"
 #include "bout/output_bout_types.hxx"
 #include "bout/petsc_interface.hxx"
 #include "bout/petsc_operators.hxx"
 #include "bout/petsclib.hxx"
 #include "bout/region.hxx"
 #include "bout/utils.hxx"
+
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <cmath>
@@ -422,52 +425,193 @@ PetscOperators::Parallel PetscOperators::getParallel() const {
                            + (Div_plus * Bndry_weight_minus * Grad_minus))
                           * 0.5; // C <- C
 
-  return Parallel{// Cell <- Cell operators
-                  std::move(Grad_par), std::move(Div_par), std::move(Div_par_Grad_par),
-                  std::move(dV),
+  Parallel par{// Cell <- Cell operators
+               std::move(Grad_par), std::move(Div_par), std::move(Div_par_Grad_par),
+               std::move(dV),
 
-                  // Leg <-> Cell operators
-                  std::move(Grad_minus), std::move(Grad_plus), std::move(Div_minus),
-                  std::move(Div_plus),
+               // Leg <-> Cell operators
+               std::move(Grad_minus), std::move(Grad_plus), std::move(Div_minus),
+               std::move(Div_plus),
 
-                  std::move(Backward), std::move(Forward), std::move(Inject_minus),
-                  std::move(Inject_plus),
+               std::move(Backward), std::move(Forward), std::move(Inject_minus),
+               std::move(Inject_plus),
 
-                  std::move(Interp_minus), std::move(Interp_plus),
+               std::move(Interp_minus), std::move(Interp_plus),
 
-                  std::move(Restrict_minus), std::move(Restrict_plus),
+               std::move(Restrict_minus), std::move(Restrict_plus),
 
-                  interiorLegMask<PetscForwardLegVector>(forward_leg_boundary_number,
-                                                         forward_leg_mapping),
-                  interiorLegMask<PetscBackwardLegVector>(backward_leg_boundary_number,
-                                                          backward_leg_mapping)};
+               interiorLegMask<PetscForwardLegVector>(forward_leg_boundary_number,
+                                                      forward_leg_mapping),
+               interiorLegMask<PetscBackwardLegVector>(backward_leg_boundary_number,
+                                                       backward_leg_mapping),
+
+               // K2 divergence: read below if the grid has it
+               std::nullopt, std::nullopt};
+
+  if (mesh->sourceHasVar("k2_forward_weights")
+      or mesh->sourceHasVar("k2_backward_weights")) {
+    loadK2(par, PetscForwardLegVector::pointwiseMultiply(dV_leg_plus, inv_dl_plus),
+           PetscBackwardLegVector::pointwiseMultiply(dV_leg_minus, inv_dl_minus));
+  }
+  return par;
 }
 
-Field3D PetscOperators::Parallel::Div_par_K_Grad_par(const Field3D& K, const Field3D& f,
-                                                     bool bndry_flux) const {
-  const auto grad_plus = Grad_plus(f);
-  const auto grad_minus = Grad_minus(f);
-  const auto K_plus = Interp_plus(K);
-  const auto K_minus = Interp_minus(K);
+namespace {
+/// max |v| over the legs where mask is 1
+template <typename LegVector>
+BoutReal maskedMaxAbs(const LegVector& v, const LegVector& mask) {
+  const auto masked = LegVector::pointwiseMultiply(v, mask);
+  PetscReal result{0.0};
+  BOUT_DO_PETSC(VecNorm(masked.raw(), NORM_INFINITY, &result));
+  return result;
+}
 
-  auto flux_plus = PetscForwardLegVector::pointwiseMultiply(K_plus, grad_plus);
-  auto flux_minus = PetscBackwardLegVector::pointwiseMultiply(K_minus, grad_minus);
+template <typename LegVector>
+BoutReal maxAbs(const LegVector& v) {
+  PetscReal result{0.0};
+  BOUT_DO_PETSC(VecNorm(v.raw(), NORM_INFINITY, &result));
+  return result;
+}
+} // namespace
+
+template <typename Operator>
+Operator PetscOperators::readK2Operator(const std::string& direction,
+                                        const PetscLegMappingPtr& leg_mapping) const {
+  const auto rows = meshGetArray<int>(fmt::format("k2_{}_rows", direction));
+  const auto columns = meshGetArray<int>(fmt::format("k2_{}_columns", direction));
+  const auto weights = meshGetArray<BoutReal>(fmt::format("k2_{}_weights", direction));
+  const int n_rows = meshGetInt("total_cells");
+  const int n_legs = leg_mapping->globalSize();
+  if (static_cast<int>(rows.size()) != n_rows + 1) {
+    throw BoutException("k2_{}_rows has {} entries, expected total_cells + 1 = {}",
+                        direction, rows.size(), n_rows + 1);
+  }
+  if (columns.size() != weights.size() or rows[0] != 0
+      or rows[n_rows] != static_cast<int>(columns.size())) {
+    throw BoutException("k2_{}_rows/columns/weights are not a consistent CSR matrix",
+                        direction);
+  }
+  for (const int column : columns) {
+    if (column < 0 or column >= n_legs) {
+      throw BoutException("k2_{}_columns: leg index {} outside [0, n_{}_legs = {})",
+                          direction, column, direction, n_legs);
+    }
+  }
+  return Operator(cell_mapping, leg_mapping, rows, columns, weights);
+}
+
+void PetscOperators::loadK2(Parallel& par, const PetscForwardLegVector& scale_plus,
+                            const PetscBackwardLegVector& scale_minus) const {
+  constexpr int supported_version = 1;
+  if (mesh->sourceHasVar("k2_version")) {
+    int version{0};
+    mesh->get(version, "k2_version", 0);
+    if (version < 1 or version > supported_version) {
+      throw BoutException("K2 matrices of version {} in the grid file; this BOUT++ "
+                          "supports version {}",
+                          version, supported_version);
+    }
+  }
+  par.Div_minus_k2 =
+      readK2Operator<PetscForwardToCellOperator>("forward", forward_leg_mapping);
+  par.Div_plus_k2 =
+      readK2Operator<PetscBackwardToCellOperator>("backward", backward_leg_mapping);
+
+  // Conservation: every interior leg flux leaves one cell and enters others,
+  // so the dV-weighted column sums vanish on interior legs:
+  // (dV^T Div_k2)_l = 0. This fails if the generator used another cell
+  // volume (dy * dagp_us_volume) than this grid provides. The scale is the
+  // own-face entry of a leg, dV_leg / dl (the support-operator column).
+  const auto dV = makePetscCellVector(cell_mapping, par.dV);
+  PetscForwardLegVector colsum_plus(forward_leg_mapping);
+  PetscBackwardLegVector colsum_minus(backward_leg_mapping);
+  BOUT_DO_PETSC(MatMultTranspose(par.Div_minus_k2->raw(), dV.raw(), colsum_plus.raw()));
+  BOUT_DO_PETSC(MatMultTranspose(par.Div_plus_k2->raw(), dV.raw(), colsum_minus.raw()));
+  const BoutReal error_plus =
+      maskedMaxAbs(colsum_plus, par.Interior_plus) / maxAbs(scale_plus);
+  const BoutReal error_minus =
+      maskedMaxAbs(colsum_minus, par.Interior_minus) / maxAbs(scale_minus);
+  constexpr BoutReal tolerance = 1e-10;
+  if (not(error_plus < tolerance and error_minus < tolerance)) {
+    throw BoutException(
+        "The K2 divergence matrices of the grid file are not conservative with the "
+        "cell volume dy * dagp_us_volume of this grid: relative dV-weighted column "
+        "sums {:e} (forward), {:e} (backward), tolerance {:e}. Were they generated "
+        "for this grid?",
+        error_plus, error_minus, tolerance);
+  }
+  output_info.write("PetscOperators: K2 parallel divergence loaded (conservation "
+                    "{:.1e} forward, {:.1e} backward)\n",
+                    error_plus, error_minus);
+}
+
+namespace {
+/// Half-step leg fluxes K * Grad f on both sides with the boundary treatment
+/// of the support operators (see getParallel): boundary legs weighted 2 if
+/// bndry_flux, otherwise zero. Without K (nullptr) the flux is Grad f.
+std::pair<PetscForwardLegVector, PetscBackwardLegVector>
+legFluxes(const PetscOperators::Parallel& par, const Field3D* K, const Field3D& f,
+          bool bndry_flux) {
+  auto flux_plus = par.Grad_plus(f);
+  auto flux_minus = par.Grad_minus(f);
+  if (K != nullptr) {
+    const auto K_plus = par.Interp_plus(*K);
+    const auto K_minus = par.Interp_minus(*K);
+    flux_plus = PetscForwardLegVector::pointwiseMultiply(K_plus, flux_plus);
+    flux_minus = PetscBackwardLegVector::pointwiseMultiply(K_minus, flux_minus);
+  }
   if (bndry_flux) {
     // A boundary face appears in only one half-operator (see getParallel):
     // weight 2 on boundary legs, i.e. flux * (2 - interior mask)
     flux_plus = (flux_plus * 2.0)
-                - PetscForwardLegVector::pointwiseMultiply(flux_plus, Interior_plus);
-    flux_minus = (flux_minus * 2.0)
-                 - PetscBackwardLegVector::pointwiseMultiply(flux_minus, Interior_minus);
+                - PetscForwardLegVector::pointwiseMultiply(flux_plus, par.Interior_plus);
+    flux_minus =
+        (flux_minus * 2.0)
+        - PetscBackwardLegVector::pointwiseMultiply(flux_minus, par.Interior_minus);
   } else {
     // No flux through the parallel boundaries
-    flux_plus = PetscForwardLegVector::pointwiseMultiply(flux_plus, Interior_plus);
-    flux_minus = PetscBackwardLegVector::pointwiseMultiply(flux_minus, Interior_minus);
+    flux_plus = PetscForwardLegVector::pointwiseMultiply(flux_plus, par.Interior_plus);
+    flux_minus =
+        PetscBackwardLegVector::pointwiseMultiply(flux_minus, par.Interior_minus);
   }
+  return {std::move(flux_plus), std::move(flux_minus)};
+}
 
+void requireK2(const PetscOperators::Parallel& par) {
+  if (not par.hasK2()) {
+    throw BoutException(
+        "The K2 parallel divergence (conduction_method = PetscOperatorK2) needs the "
+        "matrices k2_forward_rows/columns/weights and k2_backward_rows/columns/weights "
+        "in the grid file, which this grid does not have. Regenerate the grid with a "
+        "zoidberg version that writes them, or add them to the grid file.");
+  }
+}
+} // namespace
+
+Field3D PetscOperators::Parallel::Div_par_K_Grad_par(const Field3D& K, const Field3D& f,
+                                                     bool bndry_flux) const {
+  const auto [flux_plus, flux_minus] = legFluxes(*this, &K, f, bndry_flux);
   const auto div_minus = Div_minus(flux_plus);
   const auto div_plus = Div_plus(flux_minus);
   return (toField3D(div_minus, K) + toField3D(div_plus, K)) * 0.5;
+}
+
+Field3D PetscOperators::Parallel::Div_par_K_Grad_par_k2(const Field3D& K,
+                                                        const Field3D& f,
+                                                        bool bndry_flux) const {
+  requireK2(*this);
+  const auto [flux_plus, flux_minus] = legFluxes(*this, &K, f, bndry_flux);
+  const auto div_minus = (*Div_minus_k2)(flux_plus);
+  const auto div_plus = (*Div_plus_k2)(flux_minus);
+  return (toField3D(div_minus, K) + toField3D(div_plus, K)) * 0.5;
+}
+
+Field3D PetscOperators::Parallel::Div_par_Grad_par_k2(const Field3D& f) const {
+  requireK2(*this);
+  const auto [flux_plus, flux_minus] = legFluxes(*this, nullptr, f, true);
+  const auto div_minus = (*Div_minus_k2)(flux_plus);
+  const auto div_plus = (*Div_plus_k2)(flux_minus);
+  return (toField3D(div_minus, f) + toField3D(div_plus, f)) * 0.5;
 }
 
 PetscCellOperator makeNeumannOperator(const PetscCellMappingPtr& mapping,

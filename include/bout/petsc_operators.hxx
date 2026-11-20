@@ -1056,6 +1056,34 @@ public:
     /// @returns Field3D containing Div_par(K * Grad_par(f)) at interior cells.
     Field3D Div_par_K_Grad_par(const Field3D& K, const Field3D& f,
                                bool bndry_flux = true) const;
+
+    /// Flux-reconstructed conservative divergence ("K2", T-094), C ← L+:
+    /// drop-in replacement for Div_minus (same sign and scaling, boundary
+    /// legs included). Read from the grid file (k2_forward_rows/columns/
+    /// weights) when present, otherwise empty.
+    std::optional<PetscForwardToCellOperator> Div_minus_k2;
+    /// K2 divergence C ← L-, replacing Div_plus (k2_backward_*).
+    std::optional<PetscBackwardToCellOperator> Div_plus_k2;
+
+    /// True if the grid provides the K2 divergence matrices.
+    bool hasK2() const { return Div_minus_k2.has_value() and Div_plus_k2.has_value(); }
+
+    /// @brief Parallel diffusion Div_par(K * Grad_par(f)) with the K2
+    /// divergence: as @ref Div_par_K_Grad_par (same leg fluxes, boundary
+    /// treatment and bndry_flux option) with Div_minus / Div_plus replaced by
+    /// Div_minus_k2 / Div_plus_k2. Conservative in the volume dV; the error of
+    /// the divergence converges with the reconstruction order of the grid
+    /// generator also on irregular meshes.
+    ///
+    /// @throws BoutException if the grid has no K2 matrices.
+    Field3D Div_par_K_Grad_par_k2(const Field3D& K, const Field3D& f,
+                                  bool bndry_flux = true) const;
+
+    /// @brief Div_par(Grad_par(f)) with the K2 divergence, boundary fluxes
+    /// included (the analogue of Div_par_Grad_par).
+    ///
+    /// @throws BoutException if the grid has no K2 matrices.
+    Field3D Div_par_Grad_par_k2(const Field3D& f) const;
   };
 
   /// @brief Assemble and return the full set of parallel SOM operators.
@@ -1090,6 +1118,16 @@ public:
   };
 
 private:
+  /// Read the K2 divergence matrices (if any) into @p par and check their
+  /// conservation; @p scale_plus / @p scale_minus are dV_leg / dl.
+  void loadK2(Parallel& par, const PetscForwardLegVector& scale_plus,
+              const PetscBackwardLegVector& scale_minus) const;
+
+  /// Read one K2 CSR matrix (k2_<direction>_rows/columns/weights)
+  template <typename Operator>
+  Operator readK2Operator(const std::string& direction,
+                          const PetscLegMappingPtr& leg_mapping) const;
+
   mutable std::optional<PetscForwardOperator> cache_forward;
   mutable std::optional<PetscBackwardOperator> cache_backward;
   /// @brief Read a Field3D from the mesh, throwing if the field is absent.

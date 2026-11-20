@@ -389,6 +389,14 @@ Field3D Div_par_K_Grad_par_mod_impl(const Field3DParallel& Kin,
       throw BoutException("BOUT++ was compiled without PETSc.");
 #endif
     }
+    if constexpr (conduction_method == bout::ConductionMethod::PetscOperatorK2) {
+#if BOUT_HAS_PETSC
+      auto par = PetscOperators::Cache::getParallel(Kin.getMesh());
+      return par->Div_par_K_Grad_par_k2(Kin, fin, bndry_flux);
+#else
+      throw BoutException("BOUT++ was compiled without PETSc.");
+#endif
+    }
 
     const auto& K_up = Kin.yup();
     const auto& K_down = Kin.ydown();
@@ -560,9 +568,11 @@ Field3D Div_par_K_Grad_par_mod(const Field3DParallel& Kin, const Field3DParallel
     return Div_par_K_Grad_par_mod_impl<Harmonic>(Kin, fin, flow_ylow, bndry_flux);
   case PetscOperator:
     return Div_par_K_Grad_par_mod_impl<PetscOperator>(Kin, fin, flow_ylow, bndry_flux);
+  case PetscOperatorK2:
+    return Div_par_K_Grad_par_mod_impl<PetscOperatorK2>(Kin, fin, flow_ylow, bndry_flux);
   }
   throw BoutException("Unknown method `{}` - choose from `Original`, `ProductJK`, "
-                      "`Harmonic` or `PetscOperator`.",
+                      "`Harmonic`, `PetscOperator` or `PetscOperatorK2`.",
                       method);
 }
 /*******************************************************************************
