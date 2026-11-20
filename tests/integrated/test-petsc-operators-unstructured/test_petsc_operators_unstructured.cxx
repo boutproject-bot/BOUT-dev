@@ -5,6 +5,7 @@
 #include "bout/boundary_region_iter.hxx"
 #include "bout/bout.hxx"
 #include "bout/boutexception.hxx"
+#include "bout/coordinates.hxx"
 #include "bout/difops.hxx"
 #include "bout/field3d.hxx"
 #include "bout/field_factory.hxx"
@@ -23,6 +24,18 @@ int main(int argc, char** argv) {
 
   {
     using bout::globals::mesh;
+    // Optional length normalisation of the metric, as Hermes-3 does on FCI
+    // grids (g_ij / L^2, J / L^3): the operators must then use the
+    // normalised lengths, also the K2 matrices whose weights were computed
+    // from the (unnormalised) metric in the grid file
+    const BoutReal length_normalisation =
+        Options::root()["length_normalisation"].withDefault(1.0);
+    if (length_normalisation != 1.0) {
+      MetricNormaliser norm;
+      norm.g = length_normalisation * length_normalisation;
+      norm.J = length_normalisation * length_normalisation * length_normalisation;
+      mesh->getCoordinates()->normaliseMetric(norm);
+    }
     const auto par = PetscOperators::Cache::getParallel(mesh);
 
     // f linear along the (straight) field lines, with its values at the

@@ -450,8 +450,26 @@ PetscOperators::Parallel PetscOperators::getParallel() const {
 
   if (mesh->sourceHasVar("k2_forward_weights")
       or mesh->sourceHasVar("k2_backward_weights")) {
+    // The K2 weights contain 1 / dl+- computed by the grid generator from the
+    // metric in the grid file (dl = dy * sqrt(g_22), SI units), whereas the
+    // leg fluxes use the parallel lengths of this mesh, which may be
+    // normalised (Hermes-3 divides g_22 by rho_s0^2 on FCI grids). Convert
+    // the K2 columns to the lengths of this mesh: factor dl_file / dl_mesh
+    // on each leg (1 if the metric is used unchanged).
+    Field3D dl_file = dl;
+    if (mesh->sourceHasVar("dy") and mesh->sourceHasVar("g_22")) {
+      dl_file = meshGetField3D(mesh, "dy") * sqrt(meshGetField3D(mesh, "g_22"));
+    }
+    dl_file.splitParallelSlices();
+    dl_file.yup() = 0.0;
+    dl_file.ydown() = 0.0;
+    dl_file.applyParallelBoundary("parallel_neumann_o1");
     loadK2(par, PetscForwardLegVector::pointwiseMultiply(dV_leg_plus, inv_dl_plus),
-           PetscBackwardLegVector::pointwiseMultiply(dV_leg_minus, inv_dl_minus));
+           PetscBackwardLegVector::pointwiseMultiply(dV_leg_minus, inv_dl_minus),
+           PetscForwardLegVector::pointwiseMultiply(par.Interp_plus(dl_file),
+                                                    inv_dl_plus),
+           PetscBackwardLegVector::pointwiseMultiply(par.Interp_minus(dl_file),
+                                                     inv_dl_minus));
   }
   return par;
 }
@@ -501,7 +519,9 @@ Operator PetscOperators::readK2Operator(const std::string& direction,
 }
 
 void PetscOperators::loadK2(Parallel& par, const PetscForwardLegVector& scale_plus,
-                            const PetscBackwardLegVector& scale_minus) const {
+                            const PetscBackwardLegVector& scale_minus,
+                            const PetscForwardLegVector& length_plus,
+                            const PetscBackwardLegVector& length_minus) const {
   constexpr int supported_version = 1;
   if (mesh->sourceHasVar("k2_version")) {
     int version{0};
@@ -512,10 +532,13 @@ void PetscOperators::loadK2(Parallel& par, const PetscForwardLegVector& scale_pl
                           version, supported_version);
     }
   }
+  // Columns scaled from the lengths of the grid file to those of this mesh
   par.Div_minus_k2 =
-      readK2Operator<PetscForwardToCellOperator>("forward", forward_leg_mapping);
+      readK2Operator<PetscForwardToCellOperator>("forward", forward_leg_mapping)
+      * diagonal(length_plus);
   par.Div_plus_k2 =
-      readK2Operator<PetscBackwardToCellOperator>("backward", backward_leg_mapping);
+      readK2Operator<PetscBackwardToCellOperator>("backward", backward_leg_mapping)
+      * diagonal(length_minus);
 
   // Conservation: every interior leg flux leaves one cell and enters others,
   // so the dV-weighted column sums vanish on interior legs:
@@ -540,9 +563,14 @@ void PetscOperators::loadK2(Parallel& par, const PetscForwardLegVector& scale_pl
         "for this grid?",
         error_plus, error_minus, tolerance);
   }
+  PetscReal length_min{0.0};
+  PetscReal length_max{0.0};
+  BOUT_DO_PETSC(VecMin(length_plus.raw(), nullptr, &length_min));
+  BOUT_DO_PETSC(VecMax(length_plus.raw(), nullptr, &length_max));
   output_info.write("PetscOperators: K2 parallel divergence loaded (conservation "
-                    "{:.1e} forward, {:.1e} backward)\n",
-                    error_plus, error_minus);
+                    "{:.1e} forward, {:.1e} backward; length factor grid file / "
+                    "mesh {:e} to {:e})\n",
+                    error_plus, error_minus, length_min, length_max);
 }
 
 namespace {

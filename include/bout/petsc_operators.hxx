@@ -1120,8 +1120,12 @@ public:
 private:
   /// Read the K2 divergence matrices (if any) into @p par and check their
   /// conservation; @p scale_plus / @p scale_minus are dV_leg / dl.
+  /// @p length_plus / @p length_minus convert the 1/dl in the stored weights
+  /// (lengths of the grid file metric) to this mesh: dl_file / dl_mesh per leg.
   void loadK2(Parallel& par, const PetscForwardLegVector& scale_plus,
-              const PetscBackwardLegVector& scale_minus) const;
+              const PetscBackwardLegVector& scale_minus,
+              const PetscForwardLegVector& length_plus,
+              const PetscBackwardLegVector& length_minus) const;
 
   /// Read one K2 CSR matrix (k2_<direction>_rows/columns/weights)
   template <typename Operator>

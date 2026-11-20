@@ -31,7 +31,13 @@
 #   bndry_flux = true it equals the boundary flux, which enters through the
 #   boundary legs as in the support operator (same integral);
 # * on a grid without the K2 matrices, both entry points throw an error that
-#   names the missing matrices.
+#   names the missing matrices;
+# * normalised metric (length_normalisation = L: g_ij / L^2, J / L^3, as
+#   Hermes-3 does on FCI grids): the K2 weights in the grid file contain
+#   1/dl of the unnormalised metric and must be converted to the mesh
+#   lengths. The K2 checks hold with the normalised dl, and with variable K
+#   and the Dirichlet wall values of f the K2 and support-operator results
+#   are those without normalisation times L^2.
 #
 # If the generated grids have no K2 matrices (zoidberg without K2 support),
 # the K2 checks on them are skipped with a message, and the test still
@@ -168,6 +174,33 @@ def check_k2(path, tilted):
     return report(path, checks)
 
 
+LENGTH_NORMALISATION = 1.25e-3
+
+
+def check_normalised(grid, reference):
+    """Normalised metric (lengths / L): the K2 checks, and the scaling of
+    the variable-K results with Dirichlet wall values (L^2) against the
+    unnormalised run in `reference`"""
+    L = LENGTH_NORMALISATION
+    path = run(
+        2,
+        f"NYPE=2 mesh:file={grid} length_normalisation={L}",
+        f"data_normalised_{pathlib.Path(grid).name.split('.')[0]}",
+    )
+    failures = check_k2(path, False)
+
+    def get(name, p):
+        return collect(name, path=p, info=False, xguards=False, yguards=False)[..., 0]
+
+    checks = {}
+    for name in ("k2_div_variable_bndry", "so_div_variable_bndry", "k2_div_variable"):
+        ref = get(name, reference)
+        checks[f"normalised metric: {name} = unnormalised * L^2"] = np.max(
+            np.abs(get(name, path) - ref * L**2)
+        ) / np.max(np.abs(ref * L**2))
+    return failures + report(path, checks)
+
+
 def has_k2(filename):
     with Dataset(filename) as ds:
         return "k2_forward_weights" in ds.variables
@@ -237,4 +270,12 @@ def test_petsc_operators_unstructured():
     else:
         failures += k2_unavailable("grid_tilted.fci.nc")
     failures += check_missing_k2("grid.fci.nc")
+    for grid, ok, ref in (
+        ("grid.fci.nc", k2_straight, "data_np2"),
+        ("grid_tilted.fci.nc", k2_tilted, "data_tilted_np2"),
+    ):
+        if ok:
+            failures += [
+                f"normalised {grid}: {f}" for f in check_normalised(grid, ref)
+            ]
     assert not failures, failures
