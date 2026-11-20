@@ -1,0 +1,19 @@
+# Perpendicular operator benchmark on an unstructured grid (made by the test)
+
+ncalls = 200
+
+f = sin(6.283185307179586 * gridvar:R) * cos(6.283185307179586 * gridvar:Z)
+a = 1 + 0.3 * cos(6.283185307179586 * gridvar:R)
+
+[input:grid_variables]
+R = field3d
+Z = field3d
+
+[mesh]
+file = "grid.fci.nc"
+
+[mesh:paralleltransform]
+type = fci
+
+[mesh:paralleltransform:xzinterpolation]
+type = precomputed

@@ -640,12 +640,13 @@ void Field3D::applyParallelBoundary(const std::string& region,
   BoundaryFactory* bfact = BoundaryFactory::getInstance();
 
   /// Loop over the mesh boundary regions
+  // Labels need not be unique (e.g. FCI_forward is used for the inner and
+  // the outer boundary), so apply to every region with this label
   for (const auto& reg : fieldmesh->getBoundariesPar()) {
     if (reg->label == region) {
       auto op = std::unique_ptr<BoundaryOpPar>{
           dynamic_cast<BoundaryOpPar*>(bfact->create(condition, reg))};
       op->apply(*this);
-      break;
     }
   }
 }
@@ -664,7 +665,7 @@ void Field3D::applyParallelBoundary(const std::string& region,
   /// Get the boundary factory (singleton)
   BoundaryFactory* bfact = BoundaryFactory::getInstance();
 
-  /// Loop over the mesh boundary regions
+  /// Loop over the mesh boundary regions (every region with this label)
   for (const auto& reg : fieldmesh->getBoundariesPar()) {
     if (reg->label == region) {
       // BoundaryFactory can't create boundaries using Field3Ds, so get temporary
@@ -674,7 +675,6 @@ void Field3D::applyParallelBoundary(const std::string& region,
       // then clone that with the actual argument
       auto op = std::unique_ptr<BoundaryOpPar>{tmp->clone(reg.get(), f)};
       op->apply(*this);
-      break;
     }
   }
 }
@@ -1052,5 +1052,6 @@ Field3DParallel& Field3DParallel::allocate() {
       }
     }
   }
+  resetRegionParallel();
   return *this;
 }

@@ -311,10 +311,16 @@ void BoutMesh::findProcessorSplit() {
 
   output_info.write(_f("Finding value for NXPE (ideal = {:f})\n"), ideal);
 
+  // Unstructured grids may keep many Dirichlet wall nodes in the x guard
+  // cells (MXG of them), so only split x where each processor still has at
+  // least MXG nodes (checked again after the split)
+  const bool unstructured = isUnstructured();
+
   for (int i = 1; i <= NPES; i++) { // Loop over all possibilities
     if ((NPES % i == 0) &&          // Processors divide equally
         (MX % i == 0) &&            // Mesh in X divides equally
-        (ny % (NPES / i) == 0)) {   // Mesh in Y divides equally
+        (ny % (NPES / i) == 0) &&   // Mesh in Y divides equally
+        (not unstructured or i == 1 or MX / i >= MXG)) {
 
       output_info.write(_f("\tCandidate value: {:d}\n"), i);
 
@@ -2180,6 +2186,19 @@ void BoutMesh::topology() {
   }
 
   if ((NXPE > 1) && (MXSUB < MXG)) {
+    if (isUnstructured()) {
+      // The x halo exchange sends MXG cells to each neighbour, so every
+      // processor needs at least MXG evolving nodes
+      int max_nxpe = std::max(MX / MXG, 1);
+      while (MX % max_nxpe != 0) {
+        --max_nxpe;
+      }
+      throw BoutException(
+          "\tERROR: Unstructured grid with MXG = {:d} (e.g. Dirichlet wall nodes in "
+          "the x guard cells) needs at least MXG nodes per processor in x, but "
+          "NXPE = {:d} gives {:d}. The largest valid NXPE is {:d}\n",
+          MXG, NXPE, MXSUB, max_nxpe);
+    }
     throw BoutException("\tERROR: Grid X size must be >= guard cell size\n");
   }
   if (MYSUB < MYG) {

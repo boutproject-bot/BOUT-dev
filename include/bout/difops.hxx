@@ -217,7 +217,17 @@ Field3D Div_par_K_Grad_par(const Field3DParallel& kY, const Field3DParallel& f,
 /// :math:`K J / (g_{22} dy)`. This better matches a series-resistance
 /// interpretation of two adjacent half-cells and can give noticeably
 /// different results when coefficients or cell sizes vary strongly.
-BOUT_ENUM_CLASS_NS(bout, ConductionMethod, Original, ProductJK, Harmonic);
+///
+/// PetscOperator:
+///  Users the PETSc support operator method. For FCI only.
+///
+/// PetscOperatorK2:
+///  Support-operator gradient with the flux-reconstructed conservative
+///  divergence ("K2") whose matrices are stored in the grid file
+///  (k2_forward_* and k2_backward_*). For FCI only; throws if the grid
+///  has no K2 matrices.
+BOUT_ENUM_CLASS_NS(bout, ConductionMethod, Original, ProductJK, Harmonic, PetscOperator,
+                   PetscOperatorK2);
 
 namespace bout {
 inline std::string format_as(const ConductionMethod& method) { return toString(method); }

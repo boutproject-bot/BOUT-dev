@@ -59,6 +59,35 @@ private:
   std::shared_ptr<FieldGenerator> gen; // Generator
 };
 
+/// Dirichlet boundary condition evaluated at every boundary cell
+///
+/// Sets each boundary (guard) cell to the boundary function evaluated at
+/// that cell's own position. Used on unstructured FCI meshes, where the
+/// x guard cells hold Dirichlet wall nodes (see Mesh::isUnstructured), so the
+/// boundary is at the cells themselves, not half way to the interior.
+class BoundaryDirichletNode : public BoundaryOp {
+public:
+  BoundaryDirichletNode() = default;
+  BoundaryDirichletNode(BoundaryRegion* region, std::shared_ptr<FieldGenerator> g)
+      : BoundaryOp(region), gen(std::move(g)) {}
+
+  using BoundaryOp::clone;
+  BoundaryOp* clone(BoundaryRegion* region, const std::list<std::string>& args) override;
+
+  using BoundaryOp::apply;
+  void apply(Field2D& f) override { apply(f, 0.); }
+  void apply(Field2D& f, BoutReal t) override;
+  void apply(Field3D& f) override { apply(f, 0.); }
+  void apply(Field3D& f, BoutReal t) override;
+
+  using BoundaryOp::apply_ddt;
+  void apply_ddt(Field2D& f) override;
+  void apply_ddt(Field3D& f) override;
+
+private:
+  std::shared_ptr<FieldGenerator> gen; // Generator
+};
+
 /// Dirichlet (set to zero) boundary condition
 class BoundaryDirichlet : public BoundaryOp {
 public:

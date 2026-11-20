@@ -12,7 +12,6 @@
 #include "bout/output_bout_types.hxx" // NOLINT(unused-includes, misc-include-cleaner)
 #include "bout/region.hxx"
 #include "bout/vector2d.hxx"
-
 #include <map>
 #include <memory>
 
@@ -207,10 +206,20 @@ Field3D Div_a_Grad_perp_limit(const Field3D& a, const Field3D& g, const Field3D&
 
 class Div_a_Grad_perp_FCI {
 public:
+  virtual Field3D operator()(const Field3D& a, const Field3D& f, Field3D& low_xlow,
+                             Field3D& flow_zlow, bool upwinding) const = 0;
+  virtual Field3D operator()(const Field3D& a, const Field3D& f,
+                             bool upwinding) const = 0;
+
+  static std::shared_ptr<Div_a_Grad_perp_FCI> create(Mesh* mesh, BoutReal rho_s0);
+};
+
+class Div_a_Grad_perp_FCI_structured : public Div_a_Grad_perp_FCI {
+public:
   Field3D operator()(const Field3D& a, const Field3D& f, Field3D& low_xlow,
-                     Field3D& flow_zlow, bool upwinding) const;
-  Field3D operator()(const Field3D& a, const Field3D& f, bool upwinding) const;
-  Div_a_Grad_perp_FCI(Mesh& mesh);
+                     Field3D& flow_zlow, bool upwinding) const override;
+  Field3D operator()(const Field3D& a, const Field3D& f, bool upwinding) const override;
+  Div_a_Grad_perp_FCI_structured(Mesh* mesh);
 
   static std::shared_ptr<Div_a_Grad_perp_FCI> create(Mesh* mesh, BoutReal rho_s0);
 
@@ -231,5 +240,46 @@ private:
   static std::map<Mesh*, std::weak_ptr<Div_a_Grad_perp_FCI>> op_cache;
 };
 
+/// Div(a Grad_perp(f)) on unstructured FCI meshes (see Mesh::isUnstructured)
+///
+/// Node-centred finite volumes in the poloidal plane:
+/// result = Div * ((Value * a) .* (Grad * f)), where Grad and Value map cell
+/// values to quadrature points on the dual-cell faces, and Div sums the
+/// face fluxes and divides by the cell volume. The three sparse matrices are
+/// read from the grid file (zoidberg.unstructured) and applied with PETSc,
+/// which handles the domain decomposition. Requires PETSc.
+///
+/// Upwinding takes a from the side with the larger f at each face point, as
+/// the structured operator does, using an upwind reconstruction from the grid
+/// file (zoidberg writes the order-4 fit around the upwind node, evaluated at
+/// the face point; the structured operator uses the node value, which is
+/// inconsistent on irregular meshes). The flows are not face fluxes (faces are not
+/// aligned with x or z): flow_xlow and flow_zlow return the R and Z components
+/// of the cell-averaged flux vector -a grad_perp f, in normalised units.
+/// Upwinding and flows need the optional grid arrays dagp_us_left/right and
+/// dagp_us_flowR/flowZ; without them upwinding throws and the flows are zero.
+class Div_a_Grad_perp_FCI_unstructured : public Div_a_Grad_perp_FCI {
+public:
+  Field3D operator()(const Field3D& a, const Field3D& f, Field3D& flow_xlow,
+                     Field3D& flow_zlow, bool upwinding) const override;
+  Field3D operator()(const Field3D& a, const Field3D& f, bool upwinding) const override;
+  Div_a_Grad_perp_FCI_unstructured(Mesh* mesh, BoutReal rho_s0);
+  ~Div_a_Grad_perp_FCI_unstructured();
+
+  static std::shared_ptr<Div_a_Grad_perp_FCI> create(Mesh* mesh, BoutReal rho_s0);
+
+private:
+  static std::map<Mesh*, std::weak_ptr<Div_a_Grad_perp_FCI>> op_cache;
+  struct Impl;
+  std::unique_ptr<Impl> impl;
+};
+
+inline std::shared_ptr<Div_a_Grad_perp_FCI> Div_a_Grad_perp_FCI::create(Mesh* mesh,
+                                                                        BoutReal rho_s0) {
+  if (mesh->isUnstructured()) {
+    return Div_a_Grad_perp_FCI_unstructured::create(mesh, rho_s0);
+  }
+  return Div_a_Grad_perp_FCI_structured::create(mesh, rho_s0);
+}
 } // namespace FV
 #endif // BOUT_FV_OPS_H

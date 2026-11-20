@@ -9,6 +9,8 @@
 #include "bout/petsc_operators.hxx"
 #include "bout/region.hxx"
 
+#include <chrono>
+
 int main(int argc, char** argv) {
   BoutInitialise(argc, argv);
 
@@ -54,6 +56,44 @@ int main(int argc, char** argv) {
 
     dump["div_par_grad_par_op"] = parallel.Div_par_Grad_par(f_neumann);
     dump["div_par_grad_par_yud"] = Div_par_K_Grad_par(1.0, f_neumann);
+
+    // Test3 : the cache keeps the parallel operators alive between calls, so
+    // the second request (with no holder in between) reuses them
+    using steady = std::chrono::steady_clock;
+    const PetscOperators::Parallel* first{nullptr};
+    double time_first{0.0};
+    {
+      const auto start = steady::now();
+      const auto par = PetscOperators::Cache::getParallel(bout::globals::mesh);
+      time_first = std::chrono::duration<double>(steady::now() - start).count();
+      first = par.get();
+    }
+    const auto start = steady::now();
+    const auto par = PetscOperators::Cache::getParallel(bout::globals::mesh);
+    const double time_second =
+        std::chrono::duration<double>(steady::now() - start).count();
+    dump["cache_reused"] = (par.get() == first) ? 1 : 0;
+    dump["cache_time_first"] = time_first;
+    dump["cache_time_second"] = time_second;
+
+    // Test4 : support-operator conduction with a variable coefficient is
+    // conservative (sum of dV * divergence vanishes)
+    Field3D K = FieldFactory::get()->create3D("1 + 0.5 * sin(y) * cos(z)");
+    bout::globals::mesh->communicate(K);
+    K.applyParallelBoundary("parallel_neumann_o1");
+    Field3D flow;
+    dump["div_par_k_grad_par_som"] = Div_par_K_Grad_par_mod(
+        K, f_neumann, flow, false, bout::ConductionMethod::PetscOperator);
+    dump["div_par_k_grad_par_orig"] = Div_par_K_Grad_par_mod(
+        K, f_neumann, flow, false, bout::ConductionMethod::Original);
+
+    // Test5 : with a Dirichlet parallel boundary, bndry_flux = false removes
+    // the flux through the parallel boundaries (conservative), while
+    // bndry_flux = true keeps it
+    dump["div_par_k_grad_par_som_nobndry"] =
+        Div_par_K_Grad_par_mod(K, f, flow, false, bout::ConductionMethod::PetscOperator);
+    dump["div_par_k_grad_par_som_bndry"] =
+        Div_par_K_Grad_par_mod(K, f, flow, true, bout::ConductionMethod::PetscOperator);
 
     bout::writeDefaultOutputFile(dump);
   }
