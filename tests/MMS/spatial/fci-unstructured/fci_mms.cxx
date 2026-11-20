@@ -19,7 +19,10 @@
 #include <fmt/format.h>
 
 #include <cmath>
+#include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 auto fci_op_test(const std::string& name, Options& dump, const Field3D& input,
@@ -175,6 +178,21 @@ int main(int argc, char** argv) {
         mean(volume * som, true, "RGN_NOBNDRY")
         / mean(volume * abs(som), true, "RGN_NOBNDRY");
   }
+  // K2 divergence (matrices from the grid file; only if requested)
+  const bool k2 = Options::root()["k2"]
+                      .doc("Test the K2 divergence (needs the K2 matrices in the grid)")
+                      .withDefault(false);
+  if (k2) {
+    const Field3D k2_result = Div_par_K_Grad_par_mod(
+        K, input, flow_ylow, false, bout::ConductionMethod::PetscOperatorK2);
+    fci_op_test("div_par_K_grad_par_k2", dump, input, k2_result);
+    Field3D volume{mesh};
+    mesh->get(volume, "dagp_us_volume", 0.0, false);
+    volume *= mesh->getCoordinates()->dy();
+    dump["div_par_K_grad_par_k2_integral"] =
+        mean(volume * k2_result, true, "RGN_NOBNDRY")
+        / mean(volume * abs(k2_result), true, "RGN_NOBNDRY");
+  }
   fci_op_test("laplace_par", dump, input, Laplace_par(input));
 
   // Finite volume methods
@@ -211,9 +229,24 @@ int main(int argc, char** argv) {
         FieldFactory::get()->create3D("laplace_par_solution", Options::getRoot(), mesh)};
     Field3D one{1.0, mesh};
     mesh->communicate(one);
-    for (const auto& [label, method] :
-         {std::pair{"orig", bout::ConductionMethod::Original},
-          std::pair{"som", bout::ConductionMethod::PetscOperator}}) {
+    const std::map<std::string, bout::ConductionMethod> known{
+        {"orig", bout::ConductionMethod::Original},
+        {"som", bout::ConductionMethod::PetscOperator},
+        {"k2", bout::ConductionMethod::PetscOperatorK2}};
+    std::vector<std::pair<std::string, bout::ConductionMethod>> methods;
+    for (const auto& name :
+         strsplit(Options::root()["solve_methods"]
+                      .doc("Comma-separated conduction methods of the solution-error "
+                           "test: orig, som, k2")
+                      .withDefault<std::string>("orig,som"),
+                  ',')) {
+      const auto search = known.find(trim(name));
+      if (search == known.end()) {
+        throw BoutException("Unknown solve method '{}'", name);
+      }
+      methods.emplace_back(search->first, search->second);
+    }
+    for (const auto& [label, method] : methods) {
       const Field3D e =
           Div_par_K_Grad_par_mod(one, input, flow_ylow, false, method) - exact;
       const auto [rms, its, ok] = solutionError(mesh, method, c, e);
