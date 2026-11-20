@@ -18,6 +18,7 @@ import os
 import pathlib
 import shutil
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from time import time
 
 from boutdata.collect import collect
@@ -149,9 +150,45 @@ def k2_unavailable(what: str) -> list[str]:
     return []
 
 
+def make_centroid_grid(n: int, filename: str):
+    """bout_mms_iso grid with the unknowns at the dual-cell centroids"""
+    pol, field, layout = zu.family_spec("bout_mms_iso", n)
+    pol.use_centroid_dofs()
+    zu.make_unstructured_grid(filename, pol, field, **layout)
+
+
 def make_grids():
-    for n in NLIST:
-        make_test_grid("bout_mms", n, gridfile(n), k2=False)
+    """All grids of this test, built in NPROC processes (they are independent),
+    largest first"""
+    with ProcessPoolExecutor(NPROC) as pool:
+        futures = []
+        if hasattr(zu, "family_spec"):
+            for n in reversed(ISO_NLIST):
+                futures.append(
+                    pool.submit(make_centroid_grid, n, f"mesh_iso_centroid.{n}.fci.nc")
+                )
+        for n in reversed(ISO_NLIST):
+            futures.append(
+                pool.submit(make_test_grid, "bout_mms_iso", n, f"mesh_iso.{n}.fci.nc")
+            )
+        for n in reversed(CYLP_NLIST):
+            gridname = f"mesh_cyl_sheared.{n}.fci.nc"
+            futures.append(
+                pool.submit(
+                    make_test_grid, "bout_mms_cyl_sheared", n, gridname, k2=False
+                )
+            )
+        for n in reversed(CYL_NLIST):
+            gridname = f"mesh_cyl.{n}.fci.nc"
+            futures.append(
+                pool.submit(make_test_grid, "bout_mms_cyl", n, gridname, k2=False)
+            )
+        for n in reversed(NLIST):
+            futures.append(
+                pool.submit(make_test_grid, "bout_mms", n, gridfile(n), k2=False)
+            )
+        for future in futures:
+            future.result()
 
 
 def run(nz: int, args: str, nproc: int = NPROC, path: str = DIRECTORY):
@@ -322,7 +359,6 @@ def check_cylindrical() -> list[str]:
     errors = {operator: [] for operator in CYL_OPERATORS}
     for n in CYL_NLIST:
         gridname = f"mesh_cyl.{n}.fci.nc"
-        make_test_grid("bout_mms_cyl", n, gridname, k2=False)
         cmd = f"./fci_mms -d {CYL_DIRECTORY} NXPE=1 mesh:file={gridname}"
         print(f"Running command: {cmd}", end="")
         start = time()
@@ -362,7 +398,6 @@ def check_cylindrical_sheared() -> list[str]:
     failures = []
     for n in CYLP_NLIST:
         gridname = f"mesh_cyl_sheared.{n}.fci.nc"
-        make_test_grid("bout_mms_cyl_sheared", n, gridname, k2=False)
         cmd = f"./fci_mms -d {CYLP_DIRECTORY} NXPE=1 mesh:file={gridname}"
         print(f"Running command: {cmd}", end="")
         start = time()
@@ -444,7 +479,6 @@ def check_isotropic() -> tuple[dict, list[str]]:
     k2 = True
     for n in ISO_NLIST:
         gridname = f"mesh_iso.{n}.fci.nc"
-        make_test_grid("bout_mms_iso", n, gridname)
         k2 = k2 and has_k2(gridname)
         cmd = f"./fci_mms -d {ISO_DIRECTORY} NXPE=1 mesh:file={gridname}"
         if k2:
@@ -509,9 +543,6 @@ def check_k2_centroid() -> tuple[dict, list[str]]:
     failures = []
     for n in ISO_NLIST:
         gridname = f"mesh_iso_centroid.{n}.fci.nc"
-        pol, field, layout = zu.family_spec("bout_mms_iso", n)
-        pol.use_centroid_dofs()
-        zu.make_unstructured_grid(gridname, pol, field, **layout)
         if not has_k2(gridname):
             return {}, k2_unavailable(f"K2 on {gridname}")
         cmd = (
