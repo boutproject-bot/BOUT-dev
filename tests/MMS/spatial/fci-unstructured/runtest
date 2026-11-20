@@ -12,7 +12,9 @@
 #
 
 import argparse
+import inspect
 import json
+import os
 import pathlib
 import shutil
 import sys
@@ -20,10 +22,11 @@ from time import time
 
 from boutdata.collect import collect
 from boututils.run_wrapper import build_and_log, launch_safe
+from netCDF4 import Dataset
 from numpy import abs as npabs
 from numpy import array, log, polyfit
 from numpy import max as npmax
-from zoidberg.unstructured import make_test_grid
+from zoidberg import unstructured as zu
 
 # Global parameters
 DIRECTORY = "data"
@@ -121,9 +124,34 @@ def gridfile(n: int) -> str:
     return f"mesh.{n}.fci.nc"
 
 
+# zoidberg writes the K2 matrices by default (T-093); grids whose checks do
+# not use them are generated without, to save time
+ZOIDBERG_K2 = "k2" in inspect.signature(zu.build_grid_data).parameters
+
+
+def make_test_grid(family: str, n: int, filename: str, k2: bool = True):
+    options = {"k2": k2} if ZOIDBERG_K2 else {}
+    zu.make_test_grid(family, n, filename=filename, **options)
+
+
+def has_k2(filename: str) -> bool:
+    with Dataset(filename) as ds:
+        return "k2_forward_weights" in ds.variables
+
+
+def k2_unavailable(what: str) -> list[str]:
+    """K2 checks need grids with the K2 matrices (zoidberg with T-093):
+    skipped with a message, or a failure if BOUT_TEST_REQUIRE_K2 is set"""
+    message = f"SKIPPED: {what}: the grid has no K2 matrices (k2_forward_weights)"
+    print(message)
+    if os.environ.get("BOUT_TEST_REQUIRE_K2", "0") not in ("", "0"):
+        return [message + " (BOUT_TEST_REQUIRE_K2 is set)"]
+    return []
+
+
 def make_grids():
     for n in NLIST:
-        make_test_grid("bout_mms", n, filename=gridfile(n))
+        make_test_grid("bout_mms", n, gridfile(n), k2=False)
 
 
 def run(nz: int, args: str, nproc: int = NPROC, path: str = DIRECTORY):
@@ -294,7 +322,7 @@ def check_cylindrical() -> list[str]:
     errors = {operator: [] for operator in CYL_OPERATORS}
     for n in CYL_NLIST:
         gridname = f"mesh_cyl.{n}.fci.nc"
-        make_test_grid("bout_mms_cyl", n, filename=gridname)
+        make_test_grid("bout_mms_cyl", n, gridname, k2=False)
         cmd = f"./fci_mms -d {CYL_DIRECTORY} NXPE=1 mesh:file={gridname}"
         print(f"Running command: {cmd}", end="")
         start = time()
@@ -334,7 +362,7 @@ def check_cylindrical_sheared() -> list[str]:
     failures = []
     for n in CYLP_NLIST:
         gridname = f"mesh_cyl_sheared.{n}.fci.nc"
-        make_test_grid("bout_mms_cyl_sheared", n, filename=gridname)
+        make_test_grid("bout_mms_cyl_sheared", n, gridname, k2=False)
         cmd = f"./fci_mms -d {CYLP_DIRECTORY} NXPE=1 mesh:file={gridname}"
         print(f"Running command: {cmd}", end="")
         start = time()
@@ -378,18 +406,51 @@ def check_cylindrical_sheared() -> list[str]:
 # so that the plane mesh is isotropic at every resolution (the main family
 # keeps nR = 8 and goes from anisotropic to isotropic within n = 8...64).
 # Orders are recorded, not asserted (follow-up: decide thresholds).
+#
+# The K2 divergence (conduction_method = PetscOperatorK2) is recorded here
+# too, with an error bound (about 1.5x the measured largest error,
+# 2.3e-3, 1.1e-3, 6.7e-4) and a lower bound 1.4 of its order (1.70). The
+# unknowns of this family are the mesh nodes, which lie 0.12-0.2 h (rms)
+# from the centroids of their dual cells, while K2 gives the dual-cell
+# average: its asserted orders are checked on the centroid variant below. The energy test (random initial
+# state, explicit RK4 to t = 100) runs at n = 32.
 ISO_DIRECTORY = "data_iso"
 ISO_NLIST = [32, 48, 64]
+ISO_K2_BOUND = 3.5e-3
+ISO_K2_ORDER_BOUND = 1.4
+K2_ENERGY_TIME = 100
+K2_ENERGY_BOUND = 1.6
 
 
-def check_isotropic() -> dict:
+def check_energy(path: str, name: str) -> bool:
+    growth = quiet_collect("energy_k2_max_ratio", path)
+    final = quiet_collect("energy_k2_final_ratio", path)
+    steps = quiet_collect("energy_k2_steps", path)
+    ok = growth <= K2_ENERGY_BOUND
+    print(
+        f"K2 energy {name}: max E(t)/E(0) = {growth:.4f} <= {K2_ENERGY_BOUND} "
+        f"(E({K2_ENERGY_TIME})/E(0) = {final:.3e}, {steps:.0f} RK4 steps)"
+        f"\t............ {'PASS' if ok else 'FAIL'}"
+    )
+    return ok
+
+
+def check_isotropic() -> tuple[dict, list[str]]:
     pathlib.Path(ISO_DIRECTORY).mkdir(exist_ok=True)
     shutil.copy(pathlib.Path(DIRECTORY) / "BOUT.inp", ISO_DIRECTORY)
     errors = {operator: [] for operator in OPERATORS}
+    k2_errors = []
+    failures = []
+    k2 = True
     for n in ISO_NLIST:
         gridname = f"mesh_iso.{n}.fci.nc"
-        make_test_grid("bout_mms_iso", n, filename=gridname)
+        make_test_grid("bout_mms_iso", n, gridname)
+        k2 = k2 and has_k2(gridname)
         cmd = f"./fci_mms -d {ISO_DIRECTORY} NXPE=1 mesh:file={gridname}"
+        if k2:
+            cmd += " k2=true"
+            if n == ISO_NLIST[0]:
+                cmd += f" energy_time={K2_ENERGY_TIME}"
         print(f"Running command: {cmd}", end="")
         start = time()
         status, out = launch_safe(cmd, nproc=NPROC, mthread=MTHREAD, pipe=True)
@@ -400,10 +461,95 @@ def check_isotropic() -> dict:
             sys.exit(status)
         for operator in OPERATORS:
             errors[operator].append(quiet_collect(f"{operator}_l_2", ISO_DIRECTORY))
+        if k2:
+            k2_errors.append(quiet_collect("div_par_K_grad_par_k2_l_2", ISO_DIRECTORY))
+            if n == ISO_NLIST[0] and not check_energy(
+                ISO_DIRECTORY, f"isotropic n={n}"
+            ):
+                failures.append(f"K2 energy isotropic n={n}")
     spacing = 1.0 / array(ISO_NLIST)
     for operator in OPERATORS:
         assert_convergence(errors[operator], spacing, f"{operator} isotropic", None)
-    return {"n": ISO_NLIST, **{op: {"l_2": e} for op, e in errors.items()}}
+    result = {"n": ISO_NLIST, **{op: {"l_2": e} for op, e in errors.items()}}
+    if not k2:
+        return result, failures + k2_unavailable("K2 on bout_mms_iso")
+    name = "div_par_K_grad_par_k2 isotropic"
+    # Lower bound of the order (assert_convergence accepts 0.95 x expected)
+    ok = assert_convergence(k2_errors, spacing, name, ISO_K2_ORDER_BOUND / 0.95)
+    ok = ok and max(k2_errors) < ISO_K2_BOUND
+    print(f"{name} largest l-2 error {max(k2_errors):.3e} < {ISO_K2_BOUND}", end="")
+    print(f"\t............ {'PASS' if ok else 'FAIL'} (order >= {ISO_K2_ORDER_BOUND})")
+    if not ok:
+        failures.append(name)
+    result["div_par_K_grad_par_k2"] = {"l_2": k2_errors}
+    return result, failures
+
+
+# K2 on the isotropic family with the unknowns at the centroids of the dual
+# cells, as zoidberg places them on gmsh meshes (the production case): the
+# grid is built from the bout_mms_iso specification with use_centroid_dofs()
+# (zoidberg.unstructured.make_test_grid has no option for it). Asserted: the
+# solution error of (I - c L) f = S converges at order >= 1.8 for c = 1
+# (measured 2.07 on 48 -> 64) and is recorded with a lower bound for
+# c = 100 (measured 2.04) and for the operator itself with a variable K
+# (measured 1.87); the volume integral vanishes. GMRES tolerance 1e-6 (the
+# errors agree with 1e-10 to 5 digits, in about half the iterations).
+ISOC_DIRECTORY = "data_iso_centroid"
+K2_ORDER_SOLVE_C1 = 1.8
+K2_ORDER_BOUNDS = {"solve_k2_c100": 1.7, "div_par_K_grad_par_k2": 1.6}
+
+
+def check_k2_centroid() -> tuple[dict, list[str]]:
+    if not hasattr(zu, "family_spec"):
+        return {}, k2_unavailable("K2 on the centroid isotropic family (old zoidberg)")
+    pathlib.Path(ISOC_DIRECTORY).mkdir(exist_ok=True)
+    shutil.copy(pathlib.Path(DIRECTORY) / "BOUT.inp", ISOC_DIRECTORY)
+    keys = ("solve_k2_c1", "solve_k2_c100", "div_par_K_grad_par_k2")
+    errors = {key: [] for key in keys}
+    failures = []
+    for n in ISO_NLIST:
+        gridname = f"mesh_iso_centroid.{n}.fci.nc"
+        pol, field, layout = zu.family_spec("bout_mms_iso", n)
+        pol.use_centroid_dofs()
+        zu.make_unstructured_grid(gridname, pol, field, **layout)
+        if not has_k2(gridname):
+            return {}, k2_unavailable(f"K2 on {gridname}")
+        cmd = (
+            f"./fci_mms -d {ISOC_DIRECTORY} NXPE=1 mesh:file={gridname} k2=true "
+            f"support_operators=false solve_c={','.join(str(c) for c in SOLVE_C)} "
+            "solve_methods=k2 solve_rtol=1e-6"
+        )
+        print(f"Running command: {cmd}", end="")
+        start = time()
+        status, out = launch_safe(cmd, nproc=NPROC, mthread=MTHREAD, pipe=True)
+        print(f" ... done in {time() - start:.3}s")
+        pathlib.Path(ISOC_DIRECTORY, f"run.log.{n}").write_text(out)
+        if status:
+            print(f"Run failed!\nOutput was:\n{out}")
+            sys.exit(status)
+        for key in keys[:2]:
+            errors[key].append(quiet_collect(f"{key}_error", ISOC_DIRECTORY))
+            if quiet_collect(f"{key}_converged", ISOC_DIRECTORY) != 1:
+                failures.append(f"{key} GMRES not converged (centroid) n={n}")
+        errors[keys[2]].append(quiet_collect(f"{keys[2]}_l_2", ISOC_DIRECTORY))
+        integral = abs(quiet_collect(f"{keys[2]}_integral", ISOC_DIRECTORY))
+        ok = integral < 1e-12
+        print(
+            f"div_par_K_grad_par_k2 centroid n={n}: relative volume integral "
+            f"{integral:.3e}\t............ {'PASS' if ok else 'FAIL'}"
+        )
+        if not ok:
+            failures.append(f"div_par_K_grad_par_k2 conservation (centroid) n={n}")
+    spacing = 1.0 / array(ISO_NLIST)
+    for key in keys:
+        print(f"{key} centroid errors: " + ", ".join(f"{v:.3e}" for v in errors[key]))
+        expected = K2_ORDER_SOLVE_C1 if key == "solve_k2_c1" else K2_ORDER_BOUNDS[key]
+        # assert_convergence accepts 0.95 x expected: pass the bound / 0.95
+        if not assert_convergence(
+            errors[key], spacing, f"{key} centroid", expected / 0.95
+        ):
+            failures.append(f"{key} centroid")
+    return {"n": ISO_NLIST, **{key: {"l_2": e} for key, e in errors.items()}}, failures
 
 
 def make_plots(cases: dict[str, dict]):
@@ -470,11 +616,20 @@ if __name__ == "__main__":
     failures.extend(check_decomposition(cases))
     failures.extend(check_cylindrical())
     failures.extend(check_cylindrical_sheared())
-    isotropic = check_isotropic()
+    isotropic, failures_ = check_isotropic()
+    failures.extend(failures_)
+    centroid, failures_ = check_k2_centroid()
+    failures.extend(failures_)
 
     if args.dump_errors:
         pathlib.Path(args.dump_errors).write_text(
-            json.dumps({**cases, "isotropic nR=n/8 (record only)": isotropic})
+            json.dumps(
+                {
+                    **cases,
+                    "isotropic nR=n/8 (record only)": isotropic,
+                    "K2 isotropic centroid unknowns": centroid,
+                }
+            )
         )
 
     if args.make_plots:

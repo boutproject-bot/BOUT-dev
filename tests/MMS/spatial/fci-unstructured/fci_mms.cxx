@@ -18,8 +18,10 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -118,7 +120,10 @@ std::array<BoutReal, 3> solutionError(Mesh* mesh, bout::ConductionMethod method,
   PC pc{nullptr};
   BOUT_DO_PETSC(KSPGetPC(ksp, &pc));
   BOUT_DO_PETSC(PCSetType(pc, PCNONE));
-  BOUT_DO_PETSC(KSPSetTolerances(ksp, 1e-10, 1e-50, 1e10, 20000));
+  const BoutReal rtol = Options::root()["solve_rtol"]
+                            .doc("Relative tolerance of the GMRES solves")
+                            .withDefault(1e-10);
+  BOUT_DO_PETSC(KSPSetTolerances(ksp, rtol, 1e-50, 1e10, 20000));
   BOUT_DO_PETSC(KSPSolve(ksp, b, delta));
   PetscInt its{0};
   KSPConvergedReason reason{};
@@ -137,6 +142,59 @@ std::array<BoutReal, 3> solutionError(Mesh* mesh, bout::ConductionMethod method,
   BOUT_DO_PETSC(VecDestroy(&b));
   BOUT_DO_PETSC(VecDestroy(&delta));
   return {rms, static_cast<BoutReal>(its), reason > 0 ? 1.0 : 0.0};
+}
+
+/// Energy test of a conduction method (K = 1, no boundary flux): integrate
+/// du/dt = L u from a random initial state to time @p end_time with the
+/// classical Runge-Kutta method (explicit, so no SUNDIALS or CVODE), step
+/// 2 / rho with rho the spectral radius of L from a power iteration.
+/// Returns {max_t E(t) / E(0), E(end) / E(0), steps}, E = sum dV u^2.
+std::array<BoutReal, 3> energyGrowth(Mesh* mesh, bout::ConductionMethod method,
+                                     BoutReal end_time) {
+  Field3D one{1.0, mesh};
+  mesh->communicate(one);
+  Field3D flow;
+  auto L = [&](const Field3D& v) {
+    Field3D w = copy(v);
+    mesh->communicate(w);
+    return Div_par_K_Grad_par_mod(one, w, flow, false, method);
+  };
+  Field3D volume{mesh};
+  mesh->get(volume, "dagp_us_volume", 0.0, false);
+  volume *= mesh->getCoordinates()->dy();
+  auto energy = [&](const Field3D& v) {
+    return mean(volume * SQ(v), true, "RGN_NOBNDRY");
+  };
+
+  // Random initial state (seeded per rank: reproducible for a given
+  // decomposition)
+  std::mt19937 generator(12345U + static_cast<unsigned>(BoutComm::rank()));
+  std::uniform_real_distribution<BoutReal> uniform(-1.0, 1.0);
+  Field3D u{0.0, mesh};
+  BOUT_FOR_SERIAL(i, u.getRegion("RGN_NOBNDRY")) { u[i] = uniform(generator); }
+
+  // Spectral radius
+  Field3D v = copy(u);
+  BoutReal rho = 0.0;
+  for (int it = 0; it < 100; ++it) {
+    const BoutReal norm = sqrt(mean(SQ(v), true, "RGN_NOBNDRY"));
+    v = L(v / norm);
+    rho = sqrt(mean(SQ(v), true, "RGN_NOBNDRY"));
+  }
+  const int steps = static_cast<int>(std::ceil(end_time * rho / 2.0));
+  const BoutReal dt = end_time / steps;
+
+  const BoutReal energy0 = energy(u);
+  BoutReal max_ratio = 1.0;
+  for (int step = 0; step < steps; ++step) {
+    const Field3D k1 = L(u);
+    const Field3D k2 = L(u + 0.5 * dt * k1);
+    const Field3D k3 = L(u + 0.5 * dt * k2);
+    const Field3D k4 = L(u + dt * k3);
+    u += (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
+    max_ratio = std::max(max_ratio, energy(u) / energy0);
+  }
+  return {max_ratio, energy(u) / energy0, static_cast<BoutReal>(steps)};
 }
 } // namespace
 
@@ -255,6 +313,18 @@ int main(int argc, char** argv) {
       dump[key + "_iterations"] = its;
       dump[key + "_converged"] = ok;
     }
+  }
+
+  // Energy test of the K2 conduction (random initial state, K = 1)
+  const auto energy_time = Options::root()["energy_time"]
+                               .doc("End time of the K2 energy test (0: off)")
+                               .withDefault(0.0);
+  if (energy_time > 0.0) {
+    const auto [max_ratio, final_ratio, steps] =
+        energyGrowth(mesh, bout::ConductionMethod::PetscOperatorK2, energy_time);
+    dump["energy_k2_max_ratio"] = max_ratio;
+    dump["energy_k2_final_ratio"] = final_ratio;
+    dump["energy_k2_steps"] = steps;
   }
 
   {
