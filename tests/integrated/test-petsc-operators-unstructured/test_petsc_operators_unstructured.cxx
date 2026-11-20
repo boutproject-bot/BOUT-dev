@@ -4,16 +4,19 @@
 #include "bout/boundary_factory.hxx"
 #include "bout/boundary_region_iter.hxx"
 #include "bout/bout.hxx"
+#include "bout/boutexception.hxx"
 #include "bout/difops.hxx"
 #include "bout/field3d.hxx"
 #include "bout/field_factory.hxx"
 #include "bout/globals.hxx"
 #include "bout/options.hxx"
 #include "bout/options_io.hxx"
+#include "bout/output.hxx"
 #include "bout/parallel_boundary_op.hxx"
 #include "bout/petsc_operators.hxx"
 
 #include <memory>
+#include <string>
 
 int main(int argc, char** argv) {
   BoutInitialise(argc, argv);
@@ -73,6 +76,41 @@ int main(int argc, char** argv) {
     Kv.applyParallelBoundary("parallel_neumann_o1");
     g.applyParallelBoundary("parallel_neumann_o1");
     dump["div_variable"] = par->Div_par_K_Grad_par(Kv, g, false);
+
+    // K2 divergence (matrices from the grid file, if present)
+    dump["has_k2"] = par->hasK2() ? 1 : 0;
+    if (par->hasK2()) {
+      Field3D flow;
+      dump["k2_div_bndry"] = par->Div_par_K_Grad_par_k2(K, f, true);
+      dump["k2_div_nobndry"] = par->Div_par_K_Grad_par_k2(K, f, false);
+      dump["k2_laplace_par"] = par->Div_par_Grad_par_k2(f);
+      dump["k2_div_mod"] = Div_par_K_Grad_par_mod(
+          K, f, flow, true, bout::ConductionMethod::PetscOperatorK2);
+      dump["k2_div_variable"] = par->Div_par_K_Grad_par_k2(Kv, g, false);
+      // Variable K with the Dirichlet values of f at the walls: boundary
+      // fluxes enter through the boundary legs, which hold only their own
+      // face, as in the support operator
+      dump["k2_div_variable_bndry"] = par->Div_par_K_Grad_par_k2(Kv, f, true);
+      dump["so_div_variable_bndry"] = par->Div_par_K_Grad_par(Kv, f, true);
+    } else {
+      // Without the matrices, both entry points must throw a clear error
+      int errors = 0;
+      try {
+        par->Div_par_K_Grad_par_k2(K, f, true);
+      } catch (const BoutException& e) {
+        output.write("Expected error: {}\n", e.what());
+        errors +=
+            std::string(e.what()).find("k2_forward_rows") != std::string::npos ? 1 : 0;
+      }
+      try {
+        Field3D flow;
+        Div_par_K_Grad_par_mod(K, f, flow, true, bout::ConductionMethod::PetscOperatorK2);
+      } catch (const BoutException& e) {
+        errors +=
+            std::string(e.what()).find("k2_forward_rows") != std::string::npos ? 1 : 0;
+      }
+      dump["k2_missing_errors"] = errors;
+    }
     bout::writeDefaultOutputFile(dump);
   }
 
