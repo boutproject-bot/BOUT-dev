@@ -263,7 +263,10 @@ In brief:
   not evolved; set them with the ``dirichlet_node`` boundary condition,
   which evaluates the value at each guard cell (``dirichlet`` would place
   the boundary half way to the neighbouring x index, which is not a
-  geometric neighbour here). Because ``MXG`` guard cells are exchanged
+  geometric neighbour here). Any other x boundary condition read from the
+  input for such a region, including the default ``dirichlet`` and
+  modifiers around ``dirichlet_node``, stops with an error.
+  Because ``MXG`` guard cells are exchanged
   between processors, ``NXPE > 1`` needs at least ``MXG`` evolving nodes
   per processor: the automatic processor split respects this, and an
   explicit ``NXPE`` that violates it stops at start-up with the largest
