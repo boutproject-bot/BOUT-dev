@@ -53,7 +53,7 @@ do
     esac
 done
 
-./.build_sundials_for_ci.sh
+# Time integration uses the bundled PVODE: SUNDIALS is not built
 
 if test $UPDATE_SCRIPT -gt 0
 then

@@ -49,12 +49,12 @@ jobs:
                             -DBOUT_ENABLE_OPENMP=ON
                             -DBOUT_USE_PETSC=ON
                             -DBOUT_USE_SLEPC=ON
-                            -DBOUT_USE_SUNDIALS=ON
+                            -DBOUT_USE_SUNDIALS=OFF
+                            -DBOUT_USE_PVODE=ON
                             -DBOUT_USE_HYPRE=OFF
                             -DBOUT_USE_ADIOS2=ON
                             -DBOUT_ENABLE_PYTHON=ON
                             -DADIOS2_ROOT=/home/runner/local
-                            -DSUNDIALS_ROOT=/home/runner/local
                             -DPETSC_DIR=/home/runner/local/petsc
                             -DSLEPC_DIR=/home/runner/local/slepc"
             build_petsc: -petsc-main
@@ -77,9 +77,9 @@ jobs:
                             -DBOUT_ENABLE_BACKTRACE=OFF
                             -DBOUT_USE_PETSC=ON
                             -DBOUT_USE_SLEPC=ON
-                            -DBOUT_USE_SUNDIALS=ON
-                            -DBOUT_USE_HYPRE=ON
-                            -DSUNDIALS_ROOT=/home/runner/local"
+                            -DBOUT_USE_SUNDIALS=OFF
+                            -DBOUT_USE_PVODE=ON
+                            -DBOUT_USE_HYPRE=ON"
             on_cron: false
 
           - name: "Debug, shared"
@@ -90,9 +90,9 @@ jobs:
                             -DBOUT_ENABLE_TRACK=ON
                             -DBOUT_USE_PETSC=ON
                             -DBOUT_USE_SLEPC=ON
-                            -DBOUT_USE_SUNDIALS=ON
-                            -DBOUT_USE_HYPRE=ON
-                            -DSUNDIALS_ROOT=/home/runner/local"
+                            -DBOUT_USE_SUNDIALS=OFF
+                            -DBOUT_USE_PVODE=ON
+                            -DBOUT_USE_HYPRE=ON"
             on_cron: false
 
           - name: "Shared, release"
@@ -102,10 +102,10 @@ jobs:
                             -DCMAKE_BUILD_TYPE=Release
                             -DBOUT_USE_PETSC=ON
                             -DBOUT_USE_SLEPC=ON
-                            -DBOUT_USE_SUNDIALS=ON
+                            -DBOUT_USE_SUNDIALS=OFF
+                            -DBOUT_USE_PVODE=ON
                             -DBOUT_USE_HYPRE=ON
-                            -DBOUT_BUILD_DOCS=OFF
-                            -DSUNDIALS_ROOT=/home/runner/local"
+                            -DBOUT_BUILD_DOCS=OFF"
             omp_num_threads: 2
             on_cron: false
 
@@ -118,10 +118,10 @@ jobs:
                             -DBOUT_ENABLE_OPENMP=ON
                             -DBOUT_USE_PETSC=ON
                             -DBOUT_USE_SLEPC=ON
-                            -DBOUT_USE_SUNDIALS=ON
+                            -DBOUT_USE_SUNDIALS=OFF
+                            -DBOUT_USE_PVODE=ON
                             -DBOUT_USE_HYPRE=OFF
-                            -DBOUT_ENABLE_PYTHON=ON
-                            -DSUNDIALS_ROOT=/home/runner/local"
+                            -DBOUT_ENABLE_PYTHON=ON"
             omp_num_threads: 2
             on_cron: false
 
@@ -187,14 +187,12 @@ jobs:
           # If we update the test, invalidate the cache
           key: zenodo-data-${{ hashFiles('tests/integrated/test-fci-mpi/CMakeLists.txt') }}
 
-      - name: Cache SUNDIALS build
+      # Time integration uses the bundled PVODE: SUNDIALS is not built
+      - name: Cache local dependency builds (PETSc, ADIOS2)
         uses: actions/cache@v6
         with:
           path: /home/runner/local
-          key: bout-sundials-${{ matrix.config.os }}${{ matrix.config.build_petsc }}
-
-      - name: Build SUNDIALS
-        run: ./.build_sundials_for_ci.sh
+          key: bout-local-${{ matrix.config.os }}${{ matrix.config.build_petsc }}
 
       - name: Build PETSc
         run: BUILD_PETSC=${{ matrix.config.build_petsc }} ./.build_petsc_for_ci.sh ${{ matrix.config.build_petsc_branch }}
