@@ -21,6 +21,8 @@ jobs:
     runs-on: ${{ matrix.config.os }}
     env:
       BOUT_TEST_TIMEOUT: "6m"
+      # The unstructured FCI tests fail instead of skipping their K2 checks
+      BOUT_TEST_REQUIRE_K2: 1
       PETSC_DIR: /usr/lib/petscdir/petsc3.12/x86_64-linux-gnu-real
       PETSC_ARCH: ""
       SLEPC_DIR: /usr/lib/slepcdir/slepc3.12/x86_64-linux-gnu-real/
@@ -151,7 +153,11 @@ jobs:
               slepc-dev \
               liblapack-dev \
               libparpack2-dev \
-              libhypre-dev
+              libhypre-dev \
+              libglu1-mesa \
+              libxcursor1 \
+              libxft2 \
+              libxinerama1
 
       - uses: actions/checkout@v7
         with:
@@ -173,6 +179,10 @@ jobs:
 
           # Install the core requirements into the same venv
           uv pip install -r requirements.txt
+
+          # zoidberg with the unstructured grid generator (gmsh, meshio) for
+          # the unstructured FCI tests; not released yet
+          uv pip install "zoidberg[unstructured] @ git+https://github.com/boutproject-bot/zoidberg.git@9a270aee28a51195935dda89dd2163088c3d7ce5"
 
           # Put the venv in the PATH
           echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
