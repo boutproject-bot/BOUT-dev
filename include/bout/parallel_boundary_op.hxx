@@ -11,9 +11,24 @@
 #include "bout/unused.hxx"
 
 #include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
 
 //////////////////////////////////////////////////
 // Base class
+
+/// True if the whole of @p s (apart from surrounding white space) is a number
+inline bool isNumber(const std::string& s) {
+  std::stringstream ss(s);
+  BoutReal value{0.0};
+  ss >> value;
+  if (ss.fail()) {
+    return false;
+  }
+  ss >> std::ws;
+  return ss.eof();
+}
 
 class BoundaryOpPar : public BoundaryOpBase {
 public:
@@ -52,6 +67,12 @@ public:
   BoundaryOpPar(BoundaryOpPar* region) : bndry(region->bndry) {}
   ~BoundaryOpPar() override = default;
 
+protected:
+  /// Mesh is unstructured (checked on first use, as isUnstructured() reads
+  /// the grid source)
+  std::optional<bool> unstructured{};
+
+public:
   // Note: All methods must implement clone, except for modifiers (see below)
   virtual BoundaryOpPar* clone(bout::boundary::BoundaryRegionFCI* region,
                                const std::list<std::string>& args) = 0;
@@ -118,15 +139,15 @@ public:
   BoundaryOpPar* clone(BoundaryOpPar* region,
                        const std::list<std::string>& args) override {
     if (!args.empty()) {
-      try {
+      // A constant only if the whole argument is a number (stringToReal
+      // would read "10" from "10 * y" without an error)
+      if (isNumber(args.front())) {
         real_value = stringToReal(args.front());
         return new T(region, real_value);
-      } catch (const BoutException&) {
-        std::shared_ptr<FieldGenerator> newgen = nullptr;
-        // First argument should be an expression
-        newgen = FieldFactory::get()->parse(args.front());
-        return new T(region, newgen);
       }
+      // Otherwise the argument is an expression
+      std::shared_ptr<FieldGenerator> newgen = FieldFactory::get()->parse(args.front());
+      return new T(region, newgen);
     }
 
     return new T(region);
@@ -134,15 +155,15 @@ public:
   BoundaryOpPar* clone(bout::boundary::BoundaryRegionFCI* region,
                        const std::list<std::string>& args) override {
     if (!args.empty()) {
-      try {
+      // A constant only if the whole argument is a number (stringToReal
+      // would read "10" from "10 * y" without an error)
+      if (isNumber(args.front())) {
         real_value = stringToReal(args.front());
         return new T(region, real_value);
-      } catch (const BoutException&) {
-        std::shared_ptr<FieldGenerator> newgen = nullptr;
-        // First argument should be an expression
-        newgen = FieldFactory::get()->parse(args.front());
-        return new T(region, newgen);
       }
+      // Otherwise the argument is an expression
+      std::shared_ptr<FieldGenerator> newgen = FieldFactory::get()->parse(args.front());
+      return new T(region, newgen);
     }
 
     return new T(region);
@@ -154,15 +175,15 @@ public:
   BoundaryOpPar* clone(bout::boundary::BoundaryRegionX* region,
                        const std::list<std::string>& args) override {
     if (!args.empty()) {
-      try {
+      // A constant only if the whole argument is a number (stringToReal
+      // would read "10" from "10 * y" without an error)
+      if (isNumber(args.front())) {
         real_value = stringToReal(args.front());
         return new T(region, real_value);
-      } catch (const BoutException&) {
-        std::shared_ptr<FieldGenerator> newgen = nullptr;
-        // First argument should be an expression
-        newgen = FieldFactory::get()->parse(args.front());
-        return new T(region, newgen);
       }
+      // Otherwise the argument is an expression
+      std::shared_ptr<FieldGenerator> newgen = FieldFactory::get()->parse(args.front());
+      return new T(region, newgen);
     }
 
     return new T(region);
@@ -174,15 +195,15 @@ public:
   BoundaryOpPar* clone(bout::boundary::BoundaryRegionY* region,
                        const std::list<std::string>& args) override {
     if (!args.empty()) {
-      try {
+      // A constant only if the whole argument is a number (stringToReal
+      // would read "10" from "10 * y" without an error)
+      if (isNumber(args.front())) {
         real_value = stringToReal(args.front());
         return new T(region, real_value);
-      } catch (const BoutException&) {
-        std::shared_ptr<FieldGenerator> newgen = nullptr;
-        // First argument should be an expression
-        newgen = FieldFactory::get()->parse(args.front());
-        return new T(region, newgen);
       }
+      // Otherwise the argument is an expression
+      std::shared_ptr<FieldGenerator> newgen = FieldFactory::get()->parse(args.front());
+      return new T(region, newgen);
     }
 
     return new T(region);

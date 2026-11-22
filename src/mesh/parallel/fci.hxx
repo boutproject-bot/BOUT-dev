@@ -80,6 +80,10 @@ public:
   }
 
   Field3D integrate(Field3D& f) const;
+
+private:
+  /// Set up the cell-corner interpolation used by integrate()
+  void calcCornerWeights(const Field3D& xt_prime, const Field3D& zt_prime);
 };
 
 /// Flux Coordinate Independent method for parallel derivatives

@@ -26,6 +26,8 @@
 
 #include <bout/bout_types.hxx>
 #include <bout/boutexception.hxx>
+#include <bout/mesh.hxx>
+#include <bout/output.hxx>
 #include <bout/sys/generator_context.hxx>
 #include <bout/sys/gettext.hxx>
 #include <bout/unused.hxx>
@@ -34,12 +36,14 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <ios>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -59,12 +63,37 @@ namespace { // These classes only visible in this file
 
 // Basic generators: Numerical value, 'x', 'y' and 'z'
 
+/// On unstructured meshes (nodes along x, nz = 1) x is the fraction of the
+/// node index and z is constant, so expressions in x or z are not geometric.
+/// Warn once; geometric coordinates are available as gridvar:R, gridvar:Z.
+/// Generators are evaluated inside OpenMP loops, so the check runs once, in
+/// one thread.
+void warnIndexCoordinate(const Context& ctx) {
+  static std::atomic<bool> checked{false};
+  if (checked.load(std::memory_order_acquire) || (ctx.getMeshIfSet() == nullptr)) {
+    return;
+  }
+  static std::once_flag once;
+  std::call_once(once, [&ctx]() {
+    if (ctx.getMeshIfSet()->isUnstructured()) {
+      output_warn.write("WARNING: an input expression uses the index coordinate x or z "
+                        "on an unstructured mesh, where they are not geometric (x is the "
+                        "node-index fraction, z is constant). Use grid variables (e.g. "
+                        "gridvar:R and gridvar:Z) instead\n");
+    }
+    checked.store(true, std::memory_order_release);
+  });
+}
+
 class FieldX : public FieldGenerator {
 public:
   FieldGeneratorPtr clone(const list<FieldGeneratorPtr> UNUSED(args)) override {
     return std::make_shared<FieldX>();
   }
-  double generate(const Context& ctx) override { return ctx.x(); }
+  double generate(const Context& ctx) override {
+    warnIndexCoordinate(ctx);
+    return ctx.x();
+  }
   std::string str() const override { return "x"s; }
 };
 
@@ -82,7 +111,10 @@ public:
   FieldGeneratorPtr clone(const list<FieldGeneratorPtr> UNUSED(args)) override {
     return std::make_shared<FieldZ>();
   }
-  double generate(const Context& ctx) override { return ctx.z(); }
+  double generate(const Context& ctx) override {
+    warnIndexCoordinate(ctx);
+    return ctx.z();
+  }
   std::string str() const override { return "z"; }
 };
 

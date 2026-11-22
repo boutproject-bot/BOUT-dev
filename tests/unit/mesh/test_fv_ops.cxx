@@ -290,3 +290,26 @@ TYPED_TEST(FVVHeatingTest, UniformVelocityHasNoPeriodicHeating) {
 }
 
 } // namespace
+
+TEST_F(FVOpsTest, IsUnstructuredFlag) {
+  auto* fake_mesh = static_cast<FakeMesh*>(bout::globals::mesh);
+  EXPECT_FALSE(mesh->isUnstructured());
+
+  fake_mesh->setGridDataSource(new FakeGridDataSource({{"unstructured", 0}}));
+  EXPECT_FALSE(mesh->isUnstructured());
+
+  fake_mesh->setGridDataSource(new FakeGridDataSource({{"unstructured", 1}}));
+  EXPECT_TRUE(mesh->isUnstructured());
+
+  // Only the flag marks an unstructured grid
+  fake_mesh->setGridDataSource(new FakeGridDataSource({{"dagp_us_div_weights", 1.0}}));
+  EXPECT_FALSE(mesh->isUnstructured());
+}
+
+TEST_F(FVOpsTest, Div_a_Grad_perp_FCI_unstructured_missing_data) {
+  // Without PETSc this throws because PETSc is required; with PETSc it throws
+  // because the operator data are missing
+  static_cast<FakeMesh*>(bout::globals::mesh)
+      ->setGridDataSource(new FakeGridDataSource({{"unstructured", 1}}));
+  EXPECT_THROW(FV::Div_a_Grad_perp_FCI::create(mesh, 1), BoutException);
+}

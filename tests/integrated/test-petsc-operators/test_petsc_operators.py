@@ -1,9 +1,11 @@
+import pathlib
+import shutil
 import subprocess
 import sys
-import numpy as np
 
-from boututils.run_wrapper import build_and_log, launch_safe
+import numpy as np
 from boutdata import collect
+from boututils.run_wrapper import build_and_log, launch_safe
 
 
 def analyse_path(path, plot=False, tol=1e-12):
@@ -39,6 +41,46 @@ def analyse_path(path, plot=False, tol=1e-12):
         raise ValueError(
             f"Div_par_Grad_par operator has integral {op_div2_int} > {tol}"
         )
+
+    # Operators cached between calls (not rebuilt)
+    reused = int(collect("cache_reused", path=path))
+    t_first = float(collect("cache_time_first", path=path))
+    t_second = float(collect("cache_time_second", path=path))
+    print(
+        f"Parallel operator cache: reused {reused}, first {t_first:.3g} s, second {t_second:.3g} s"
+    )
+    if reused != 1:
+        raise ValueError("PetscOperators::Cache rebuilt the parallel operators")
+    if t_second > 0.01 * t_first:
+        raise ValueError(f"Cached request took {t_second} s (first {t_first} s)")
+
+    # Variable-coefficient conduction: the support-operator method conserves
+    som = collect("div_par_k_grad_par_som", path=path)
+    orig = collect("div_par_k_grad_par_orig", path=path)
+    som_int = np.sum((dV * som)[2:-2, :, :])
+    orig_int = np.sum((dV * orig)[2:-2, :, :])
+    scale = np.sum(np.abs(dV * som)[2:-2, :, :])
+    print(
+        f"Div_par_K_Grad_par_mod volume integral: petscoperator {som_int:.3e}, original {orig_int:.3e} (scale {scale:.3e})"
+    )
+    if np.abs(som_int) > tol * max(1.0, scale):
+        raise ValueError(
+            f"Div_par_K_Grad_par_mod(PetscOperator) has integral {som_int} > {tol}"
+        )
+
+    # bndry_flux: no flux through parallel boundaries when false
+    nob = collect("div_par_k_grad_par_som_nobndry", path=path)
+    wb = collect("div_par_k_grad_par_som_bndry", path=path)
+    nob_int = np.sum((dV * nob)[2:-2, :, :])
+    wb_int = np.sum((dV * wb)[2:-2, :, :])
+    scale = np.sum(np.abs(dV * wb)[2:-2, :, :])
+    print(
+        f"Dirichlet boundary: integral with bndry_flux=False {nob_int:.3e}, True {wb_int:.3e}"
+    )
+    if np.abs(nob_int) > tol * max(1.0, scale):
+        raise ValueError(f"bndry_flux=False still has boundary flux {nob_int}")
+    if np.abs(wb_int) < 1e3 * tol * max(1.0, scale):
+        raise ValueError("Test grid has no parallel boundary flux to remove")
 
     if plot:
         import matplotlib.pyplot as plt
@@ -98,6 +140,43 @@ def analyse_path(path, plot=False, tol=1e-12):
         fig.savefig("diffusion.png")
 
 
+def run(nproc, args=""):
+    """Run in its own directory (a copy of data/) and return the path."""
+    path = f"data_np{nproc}{args.replace(' ', '_').replace('=', '')}"
+    pathlib.Path(path).mkdir(exist_ok=True)
+    shutil.copy("data/BOUT.inp", path)
+    status, out = launch_safe(
+        f"./test_petsc_operators -d {path} {args}", nproc=nproc, pipe=True
+    )
+    pathlib.Path(path, "run.log").write_text(out)
+    assert status == 0, out
+    return path
+
+
+# Operator outputs that must not depend on the domain decomposition
+DECOMPOSITION_INVARIANT = (
+    "forward_op",
+    "grad_par_op",
+    "div_par_op",
+    "div_par_grad_par_op",
+    "dV",
+)
+
+
+def check_decomposition(reference, path, rtol=1e-12):
+    for name in DECOMPOSITION_INVARIANT:
+        a = collect(name, path=reference, info=False)
+        b = collect(name, path=path, info=False)
+        # Compare away from the X boundaries, as in analyse_path
+        np.testing.assert_allclose(
+            b[2:-2],
+            a[2:-2],
+            rtol=rtol,
+            atol=rtol * np.max(np.abs(a[2:-2])),
+            err_msg=f"{name} differs between {reference} and {path}",
+        )
+
+
 def test_petsc_operators():
     grid_path = "grid.fci.nc"
 
@@ -107,12 +186,12 @@ def test_petsc_operators():
     # Build executable
     build_and_log("test_petsc_operators")
 
-    nproc = 1
+    reference = run(1)
+    analyse_path(reference)
 
-    _, out = launch_safe(
-        "./test_petsc_operators",
-        nproc=nproc,
-        pipe=True,
-    )
-
-    analyse_path("data")
+    # The CSR assembly maps stored (grid-file) numbering to PETSc ordering;
+    # check that results do not depend on the domain decomposition
+    for args in ("NXPE=1", "NXPE=2"):
+        path = run(2, args)
+        analyse_path(path)
+        check_decomposition(reference, path)

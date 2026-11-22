@@ -24,16 +24,21 @@ int main(int argc, char** argv) {
     const auto boundary = static_cast<BoundaryParType>(i);
     const auto boundary_name = toString(boundary);
     mesh->communicate(fields[i]);
+    // Number of valid points next to each boundary point (-1: no point)
+    Field3D valid{-1.0};
+    valid.allocate();
     for (auto& bndry_par : mesh->getBoundariesPar(boundary)) {
       output.write("{:s} region\n", boundary_name);
       for (const auto& pnt : *bndry_par) {
         fields[i][pnt.ind()] += 1;
+        valid[pnt.ind()] = pnt.valid();
         output.write("{:s} increment\n", boundary_name);
       }
     }
     output.write("{:s} done\n", boundary_name);
 
     dump[fmt::format("field_{:s}", boundary_name)] = fields[i];
+    dump[fmt::format("valid_{:s}", boundary_name)] = valid;
   }
   for (const auto& name : {"forward_xt_prime", "backward_xt_prime"}) {
     Field3D tmp;
