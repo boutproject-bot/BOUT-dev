@@ -182,7 +182,7 @@ jobs:
 
           # zoidberg with the unstructured grid generator (gmsh, meshio) for
           # the unstructured FCI tests; not released yet
-          uv pip install "zoidberg[unstructured] @ git+https://github.com/boutproject-bot/zoidberg.git@4a88cdede11cd1b04cf4081b4d281ed2492ec12a"
+          uv pip install "zoidberg[unstructured] @ git+https://github.com/boutproject-bot/zoidberg.git@7a8e3b724eefb07bad7d684718c807c548939f67"
 
           # Put the venv in the PATH
           echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
