@@ -42,6 +42,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <bout/assert.hxx>
 #include <bout/boundary_factory.hxx>
@@ -399,6 +400,59 @@ void Field3D::calcParallelSlices() {
 
 ///////////////////// BOUNDARY CONDITIONS //////////////////
 
+namespace {
+/// Dirichlet wall nodes of an unstructured grid: the x guard cells at the
+/// physical x boundaries (y in the domain) with cell_number >= 0. Empty on
+/// other meshes.
+const Region<Ind3D>& wallNodes(Mesh* mesh) {
+  static const Region<Ind3D> none{};
+  if (!mesh->isUnstructured()) {
+    return none;
+  }
+  const std::string name = "RGN_WALL_NODES";
+  if (!mesh->hasRegion3D(name)) {
+    Field3D cell_number{mesh};
+    cell_number = -1.0;
+    if (mesh->sourceHasVar("cell_number")) {
+      mesh->get(cell_number, "cell_number", -1.0, false);
+    }
+    Region<Ind3D>::RegionIndices indices;
+    BOUT_FOR_SERIAL(i, cell_number.getRegion("RGN_ALL")) {
+      if (((mesh->firstX() && i.x() < mesh->xstart)
+           || (mesh->lastX() && i.x() > mesh->xend))
+          && i.y() >= mesh->ystart && i.y() <= mesh->yend && cell_number[i] >= 0) {
+        indices.push_back(i);
+      }
+    }
+    mesh->addRegion3D(name, Region<Ind3D>(indices));
+  }
+  return mesh->getRegion3D(name);
+}
+
+/// Boundary conditions applied by name use index neighbours, which on an
+/// unstructured grid are not geometric neighbours of the wall nodes: keep
+/// the wall-node values (set by dirichlet_node or computed pointwise)
+class KeepWallNodes {
+public:
+  explicit KeepWallNodes(Field3D& field)
+      : field(field), region(wallNodes(field.getMesh())) {
+    values.reserve(region.size());
+    BOUT_FOR_SERIAL(i, region) { values.push_back(field[i]); }
+  }
+  KeepWallNodes(const KeepWallNodes&) = delete;
+  KeepWallNodes& operator=(const KeepWallNodes&) = delete;
+  ~KeepWallNodes() {
+    std::size_t k = 0;
+    BOUT_FOR_SERIAL(i, region) { field[i] = values[k++]; }
+  }
+
+private:
+  Field3D& field;
+  const Region<Ind3D>& region;
+  std::vector<BoutReal> values;
+};
+} // namespace
+
 void Field3D::applyBoundary(bool init) {
 
 #if CHECK > 0
@@ -440,6 +494,7 @@ void Field3D::applyBoundary(BoutReal t) {
 void Field3D::applyBoundary(const std::string& condition) {
 
   checkData(*this);
+  const KeepWallNodes keep_wall_nodes(*this);
 
   /// Get the boundary factory (singleton)
   BoundaryFactory* bfact = BoundaryFactory::getInstance();
@@ -457,6 +512,7 @@ void Field3D::applyBoundary(const std::string& condition) {
 void Field3D::applyBoundary(const std::string& region, const std::string& condition) {
 
   checkData(*this);
+  const KeepWallNodes keep_wall_nodes(*this);
 
   /// Get the boundary factory (singleton)
   BoundaryFactory* bfact = BoundaryFactory::getInstance();

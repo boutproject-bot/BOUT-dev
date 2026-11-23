@@ -36,6 +36,7 @@
 #include <bout/boutcomm.hxx>
 #include <bout/boutexception.hxx>
 #include <bout/field2d.hxx>
+#include <bout/field3d.hxx>
 #include <bout/globals.hxx> // for mesh
 #include <bout/mesh.hxx>
 #include <bout/output.hxx>
@@ -43,6 +44,8 @@
 #include <cmath>
 #include <cstddef>
 #include <optional>
+#include <string>
+#include <vector>
 
 Field2D::Field2D(Mesh* localmesh, CELL_LOC location_in, DirectionTypes directions_in,
                  [[maybe_unused]] std::optional<size_t> regionID)
@@ -187,6 +190,59 @@ Field2D& Field2D::operator=(const BoutReal rhs) {
 
 ///////////////////// BOUNDARY CONDITIONS //////////////////
 
+namespace {
+/// Dirichlet wall nodes of an unstructured grid (see field3d.cxx)
+const Region<Ind2D>& wallNodes(Mesh* mesh) {
+  static const Region<Ind2D> none{};
+  if (!mesh->isUnstructured()) {
+    return none;
+  }
+  const std::string name = "RGN_WALL_NODES";
+  if (!mesh->hasRegion2D(name)) {
+    Field3D cell_number{mesh};
+    cell_number = -1.0;
+    if (mesh->sourceHasVar("cell_number")) {
+      mesh->get(cell_number, "cell_number", -1.0, false);
+    }
+    Region<Ind2D>::RegionIndices indices;
+    for (int x = 0; x < mesh->LocalNx; x++) {
+      if (!((mesh->firstX() && x < mesh->xstart) || (mesh->lastX() && x > mesh->xend))) {
+        continue;
+      }
+      for (int y = mesh->ystart; y <= mesh->yend; y++) {
+        if (cell_number(x, y, 0) >= 0) {
+          indices.emplace_back((x * mesh->LocalNy) + y, mesh->LocalNy, 1);
+        }
+      }
+    }
+    mesh->addRegion2D(name, Region<Ind2D>(indices));
+  }
+  return mesh->getRegion2D(name);
+}
+
+/// Keep the wall-node values during boundary conditions applied by name
+/// (see field3d.cxx)
+class KeepWallNodes {
+public:
+  explicit KeepWallNodes(Field2D& field)
+      : field(field), region(wallNodes(field.getMesh())) {
+    values.reserve(region.size());
+    BOUT_FOR_SERIAL(i, region) { values.push_back(field[i]); }
+  }
+  KeepWallNodes(const KeepWallNodes&) = delete;
+  KeepWallNodes& operator=(const KeepWallNodes&) = delete;
+  ~KeepWallNodes() {
+    std::size_t k = 0;
+    BOUT_FOR_SERIAL(i, region) { field[i] = values[k++]; }
+  }
+
+private:
+  Field2D& field;
+  const Region<Ind2D>& region;
+  std::vector<BoutReal> values;
+};
+} // namespace
+
 void Field2D::applyBoundary(bool init) {
 
 #if CHECK > 0
@@ -226,6 +282,7 @@ void Field2D::applyBoundary(BoutReal time) {
 void Field2D::applyBoundary(const std::string& condition) {
 
   checkData(*this);
+  const KeepWallNodes keep_wall_nodes(*this);
 
   /// Get the boundary factory (singleton)
   BoundaryFactory* bfact = BoundaryFactory::getInstance();
@@ -259,6 +316,7 @@ void Field2D::applyBoundary(const std::string& condition) {
 void Field2D::applyBoundary(const std::string& region, const std::string& condition) {
 
   checkData(*this);
+  const KeepWallNodes keep_wall_nodes(*this);
 
   /// Get the boundary factory (singleton)
   BoundaryFactory* bfact = BoundaryFactory::getInstance();
