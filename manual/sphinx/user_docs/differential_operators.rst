@@ -737,12 +737,26 @@ diagnostic:
 
    Field3D Div_par_K_Grad_par_mod(const Field3D &k, const Field3D &f,
                                   Field3D &flow_ylow,
-                                  bool bndry_flux=true);
+                                  bool bndry_flux=true,
+                                  bout::ConductionMethod method = bout::ConductionMethod::Original);
 
 
 As for ``Div_par_mod``, ``flow_ylow`` stores the lower :math:`y` boundary flow
 including the area factor. For FCI fields this diagnostic is currently returned
 as zero.
+
+``method`` selects the discretisation (see ``bout::ConductionMethod`` in
+``bout/difops.hxx``): ``Original``, ``ProductJK`` and ``Harmonic`` differ in
+how the face conductance is averaged. Two methods use the PETSc operators of
+:ref:`sec-parallel-operators-petsc-fci` and need an FCI parallel transform:
+
+- ``PetscOperator``: the support-operator divergence, the adjoint of the
+  parallel gradient; exactly conservative.
+- ``PetscOperatorK2``: the support-operator gradient with a flux-reconstructed
+  conservative divergence read from the grid file (``k2_forward_*`` and
+  ``k2_backward_*``, written by ``zoidberg.unstructured``); it throws if the
+  grid has none. It is consistent on irregular unstructured meshes, where the
+  support-operator divergence is not.
 
 
 Advection in 3D

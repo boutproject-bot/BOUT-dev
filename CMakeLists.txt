@@ -419,6 +419,24 @@ else()
 endif()
 message(STATUS "Found Zoidberg for FCI tests: ${zoidberg_FOUND}")
 
+# Unstructured FCI grids need zoidberg.unstructured (not yet in a release)
+execute_process(
+  COMMAND
+    ${Python3_EXECUTABLE} -c
+    "import importlib.util ; import sys; sys.exit(importlib.util.find_spec(\"zoidberg.unstructured\") is None)"
+  RESULT_VARIABLE zoidberg_unstructured_FOUND
+  ERROR_QUIET
+)
+if(zoidberg_unstructured_FOUND EQUAL 0)
+  set(zoidberg_unstructured_FOUND ON)
+else()
+  set(zoidberg_unstructured_FOUND OFF)
+endif()
+message(
+  STATUS
+    "Found zoidberg.unstructured for unstructured FCI tests: ${zoidberg_unstructured_FOUND}"
+)
+
 option(
   BOUT_GENERATE_FIELDOPS
   "Automatically re-generate the Field arithmetic operators from the Python templates. \

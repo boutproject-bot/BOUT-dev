@@ -25,6 +25,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -49,6 +50,12 @@ struct ForwardLegSpaceTag {};
 /// Operators and vectors tagged with this type map to or from the backward (y-1)
 /// leg space. See @ref ForwardLegSpaceTag and @ref CellSpaceTag.
 struct BackwardLegSpaceTag {};
+
+/// @brief Tag type identifying the face-point space F.
+///
+/// Quadrature points on the faces of the dual cells of an unstructured
+/// poloidal mesh, used by FV::Div_a_Grad_perp_FCI_unstructured.
+struct FacePointSpaceTag {};
 
 template <typename Out, typename In>
 class PetscOperator;
@@ -115,6 +122,11 @@ public:
   /// @returns The corresponding global PETSc row index.
   /// @throws BoutException if @p stored_index is not owned locally.
   PetscInt storedToPetsc(int stored_index) const;
+
+  /// @brief Is @p stored_index owned by this rank?
+  bool ownsStored(int stored_index) const {
+    return local_stored_to_petsc.contains(stored_index);
+  }
 
   /// @brief Return the permutation matrix that maps PETSc row ordering to stored
   ///        mesh-file numbering.
@@ -329,6 +341,15 @@ public:
 /// @brief Shared-pointer alias for a const PetscLegMapping.
 using PetscLegMappingPtr = std::shared_ptr<const PetscLegMapping>;
 
+/// @brief Index mapping for the face-point space F of an unstructured mesh.
+///
+/// Each face point is owned by the rank that owns its owner cell (as given
+/// by the grid file); the construction is the same as for leg spaces.
+class PetscFacePointMapping : public PetscLegMapping {
+public:
+  using PetscLegMapping::PetscLegMapping;
+};
+
 /// @brief Type-safe wrapper around a PETSc Vec belonging to a particular vector space.
 ///
 /// The compile-time @p SpaceTag (one of @ref CellSpaceTag, @ref ForwardLegSpaceTag,
@@ -481,6 +502,8 @@ using PetscCellVector = PetscSpaceVector<CellSpaceTag>;
 using PetscForwardLegVector = PetscSpaceVector<ForwardLegSpaceTag>;
 /// @brief PETSc vector in the backward leg space L-.
 using PetscBackwardLegVector = PetscSpaceVector<BackwardLegSpaceTag>;
+/// @brief PETSc vector in the face-point space F.
+using PetscFacePointVector = PetscSpaceVector<FacePointSpaceTag>;
 
 /// @brief Populate a PetscCellVector from a Field3D and its parallel slices.
 ///
@@ -577,6 +600,21 @@ public:
     PetscSpaceVector<OutSpaceTag> result(out_mapping);
     BOUT_DO_PETSC(MatMult(*this->mat_operator, rhs.raw(), result.raw()));
     return result;
+  }
+
+  /// @brief Apply the operator into an existing vector: @c result = A * rhs.
+  ///
+  /// Avoids allocating a new vector, e.g. for work vectors reused between calls.
+  void apply(const PetscSpaceVector<InSpaceTag>& rhs,
+             PetscSpaceVector<OutSpaceTag>& result) const {
+    ASSERT0(in_mapping == rhs.getMapping());
+    ASSERT0(out_mapping == result.getMapping());
+    BOUT_DO_PETSC(MatMult(*this->mat_operator, rhs.raw(), result.raw()));
+  }
+
+  /// Output-space mapping (for allocating vectors to use with apply)
+  const std::shared_ptr<const PetscIndexMapping>& outMapping() const {
+    return out_mapping;
   }
 
   /// @brief Apply the operator to a Field3D: converts to a cell vector then applies.
@@ -826,6 +864,10 @@ using PetscCellOperator = PetscOperator<CellSpaceTag, CellSpaceTag>;
 using PetscForwardLegOperator = PetscOperator<ForwardLegSpaceTag, ForwardLegSpaceTag>;
 /// @brief Operator mapping within the backward leg space L-.
 using PetscBackwardLegOperator = PetscOperator<BackwardLegSpaceTag, BackwardLegSpaceTag>;
+/// @brief Operator mapping from cell space C to face-point space F.
+using PetscCellToFacePointOperator = PetscOperator<FacePointSpaceTag, CellSpaceTag>;
+/// @brief Operator mapping from face-point space F to cell space C.
+using PetscFacePointToCellOperator = PetscOperator<CellSpaceTag, FacePointSpaceTag>;
 
 /// @brief Factory that constructs cell-space and leg-space operators from mesh metadata.
 ///
@@ -847,6 +889,9 @@ public:
   /// @param mesh Non-owning pointer to the BOUT++ mesh. Must outlive this object.
   /// @throws BoutException if any required field or scalar is missing from the mesh.
   explicit PetscOperators(Mesh* mesh);
+
+  /// @brief The cell-space mapping C shared by all operators on this mesh.
+  const PetscCellMappingPtr& cellMapping() const { return cell_mapping; }
 
   /// @brief Build the forward interpolation operator F: L+ ← C.
   ///
@@ -900,7 +945,13 @@ public:
   /// @returns A diagonal PetscBackwardLegOperator.
   PetscBackwardLegOperator diagonal(const PetscBackwardLegVector& v) const;
 
-  /// @brief Compute the forward parallel slice using the SOM weights.
+  /// @brief Compute the forward (y+1) parallel slice using the same
+  ///        interpolation weights used by the SOM parallel operators.
+  ///
+  /// Requires f.yup() to already hold valid values for the small subset of
+  /// cells whose forward map lies entirely outside the domain (boundary
+  /// virtual cells) -- these are inputs (e.g. from a physics boundary
+  /// condition), not computed here.
   ///
   /// @param f Field whose yup() slice should be (re)computed. Must have
   ///          parallel slices allocated.
@@ -912,8 +963,8 @@ public:
   ///
   /// @param f Field whose ydown() slice should be (re)computed. Must have
   ///          parallel slices allocated.
-  /// @returns A Field3D containing the forward-interpolated values, indexed
-  ///          the same way as f.yup() (i.e. at i.yp()).
+  /// @returns A Field3D containing the backward-interpolated values, indexed
+  ///          the same way as f.ydown() (i.e. at i.ym()).
   Field3D computeYdown(const Field3D& f) const;
 
   /// @brief Collection of parallel differential operators assembled for the
@@ -937,7 +988,7 @@ public:
     PetscCellOperator Div_par;
     /// Combined SOM parallel Laplacian (Div_par ∘ Grad_par): C ← C.
     PetscCellOperator Div_par_Grad_par;
-    /// Cell volume J * dx * dy * dz.
+    /// Cell volume J * dx * dy * dz (dy * dagp_us_volume on unstructured grids).
     Field3D dV;
 
     /// Half-step gradient on the backward (y-1) side: L- ← C.
@@ -969,6 +1020,11 @@ public:
     /// Weighted restriction from L- to C: I-^T * W-.
     PetscBackwardToCellOperator Restrict_plus;
 
+    /// 1 on interior legs, 0 on legs that end at a parallel boundary (L+)
+    PetscForwardLegVector Interior_plus;
+    /// 1 on interior legs, 0 on legs that end at a parallel boundary (L-)
+    PetscBackwardLegVector Interior_minus;
+
     /// @brief Compute the SOM parallel diffusion Div_par(K * Grad_par(f)).
     ///
     /// Evaluates the half-step fluxes separately on each side, multiplies by the
@@ -977,8 +1033,43 @@ public:
     ///
     /// @param K Diffusion coefficient field; must have parallel slices allocated.
     /// @param f Field to differentiate; must have parallel slices allocated.
+    /// @param bndry_flux If false, the flux through parallel boundaries (legs
+    ///        ending at a boundary virtual cell) is set to zero, as in the
+    ///        original method with bndry_flux = false (e.g. when a sheath
+    ///        boundary condition removes the boundary heat flux separately).
+    ///        If true, the full flux through the boundary faces is included
+    ///        (boundary legs are weighted 2 in their half-operator).
     /// @returns Field3D containing Div_par(K * Grad_par(f)) at interior cells.
-    Field3D Div_par_K_Grad_par(const Field3D& K, const Field3D& f) const;
+    Field3D Div_par_K_Grad_par(const Field3D& K, const Field3D& f,
+                               bool bndry_flux = true) const;
+
+    /// Flux-reconstructed conservative divergence ("K2"), C ← L+:
+    /// drop-in replacement for Div_minus (same sign and scaling, boundary
+    /// legs included). Read from the grid file (k2_forward_rows/columns/
+    /// weights) when present, otherwise empty.
+    std::optional<PetscForwardToCellOperator> Div_minus_k2;
+    /// K2 divergence C ← L-, replacing Div_plus (k2_backward_*).
+    std::optional<PetscBackwardToCellOperator> Div_plus_k2;
+
+    /// True if the grid provides the K2 divergence matrices.
+    bool hasK2() const { return Div_minus_k2.has_value() and Div_plus_k2.has_value(); }
+
+    /// @brief Parallel diffusion Div_par(K * Grad_par(f)) with the K2
+    /// divergence: as @ref Div_par_K_Grad_par (same leg fluxes, boundary
+    /// treatment and bndry_flux option) with Div_minus / Div_plus replaced by
+    /// Div_minus_k2 / Div_plus_k2. Conservative in the volume dV; the error of
+    /// the divergence converges with the reconstruction order of the grid
+    /// generator also on irregular meshes.
+    ///
+    /// @throws BoutException if the grid has no K2 matrices.
+    Field3D Div_par_K_Grad_par_k2(const Field3D& K, const Field3D& f,
+                                  bool bndry_flux = true) const;
+
+    /// @brief Div_par(Grad_par(f)) with the K2 divergence, boundary fluxes
+    /// included (the analogue of Div_par_Grad_par).
+    ///
+    /// @throws BoutException if the grid has no K2 matrices.
+    Field3D Div_par_Grad_par_k2(const Field3D& f) const;
   };
 
   /// @brief Assemble and return the full set of parallel SOM operators.
@@ -992,7 +1083,42 @@ public:
   /// @returns A @ref Parallel struct containing all assembled operators.
   Parallel getParallel() const;
 
+  /// Per-mesh cache of the operators, so that they are assembled once.
+  ///
+  /// The cache holds a shared_ptr to the operators; callers such as
+  /// Div_par_K_Grad_par_mod hold them only for one call. The entries of a
+  /// mesh are released when the mesh is destroyed (Mesh::~Mesh), and all
+  /// entries in BoutFinalise before PetscFinalize. A caller that keeps its
+  /// own copy beyond that would keep PETSc objects alive after PetscFinalize.
+  class Cache {
+  public:
+    static std::shared_ptr<PetscOperators> get(Mesh* mesh);
+    static std::shared_ptr<PetscOperators::Parallel> getParallel(Mesh* mesh);
+    /// Release the operators of @p mesh (called by Mesh::~Mesh)
+    static void release(Mesh* mesh);
+    /// Release all cached operators (called by BoutFinalise)
+    static void cleanup();
+
+  private:
+    static std::map<Mesh*, std::shared_ptr<PetscOperators>> petscOp;
+    static std::map<Mesh*, std::shared_ptr<PetscOperators::Parallel>> parOp;
+  };
+
 private:
+  /// Read the K2 divergence matrices (if any) into @p par and check their
+  /// conservation; @p scale_plus / @p scale_minus are dV_leg / dl.
+  /// @p length_plus / @p length_minus convert the 1/dl in the stored weights
+  /// (lengths of the grid file metric) to this mesh: dl_file / dl_mesh per leg.
+  void loadK2(Parallel& par, const PetscForwardLegVector& scale_plus,
+              const PetscBackwardLegVector& scale_minus,
+              const PetscForwardLegVector& length_plus,
+              const PetscBackwardLegVector& length_minus) const;
+
+  /// Read one K2 CSR matrix (k2_<direction>_rows/columns/weights)
+  template <typename Operator>
+  Operator readK2Operator(const std::string& direction,
+                          const PetscLegMappingPtr& leg_mapping) const;
+
   mutable std::optional<PetscForwardOperator> cache_forward;
   mutable std::optional<PetscBackwardOperator> cache_backward;
   /// @brief Read a Field3D from the mesh, throwing if the field is absent.
@@ -1063,6 +1189,37 @@ private:
       const int stored = local[i];
       x[i] = (stored >= 0 && stored < static_cast<int>(values.size())) ? values[stored]
                                                                        : 0.0;
+    }
+    BOUT_DO_PETSC(VecRestoreArray(out.raw(), &x));
+    return out;
+  }
+
+  /// @brief Mask over a leg space: 1 for interior legs, 0 for boundary legs.
+  template <typename LegVector>
+  LegVector interiorLegMask(const Field3D& boundary_leg_number,
+                            std::shared_ptr<const PetscLegMapping> mapping) const {
+    return legValues<LegVector>(boundary_leg_number, std::move(mapping), 1.0, 0.0);
+  }
+
+  /// @brief Vector over a leg space with @p interior on interior legs and
+  /// @p boundary on legs that end at a parallel boundary.
+  template <typename LegVector>
+  LegVector legValues(const Field3D& boundary_leg_number,
+                      std::shared_ptr<const PetscLegMapping> mapping, BoutReal interior,
+                      BoutReal boundary) const {
+    std::set<int> boundary_legs;
+    cell_mapping->mapOwnedInteriorCells([&](PetscInt, const Ind3D& i, int) {
+      const int leg = ROUND(boundary_leg_number[i]);
+      if (leg >= 0) {
+        boundary_legs.insert(leg);
+      }
+    });
+    LegVector out(mapping);
+    PetscScalar* x{nullptr};
+    BOUT_DO_PETSC(VecGetArray(out.raw(), &x));
+    const auto& local = mapping->localStoredIndices();
+    for (PetscInt i = 0; i < static_cast<PetscInt>(local.size()); ++i) {
+      x[i] = (boundary_legs.count(local[i]) != 0) ? boundary : interior;
     }
     BOUT_DO_PETSC(VecRestoreArray(out.raw(), &x));
     return out;

@@ -257,4 +257,8 @@ private:
   std::string message;
 };
 
+/// True if an expression evaluated the index coordinate x or z on an
+/// unstructured mesh since the last call; resets the flag
+bool takeIndexCoordinateUsed();
+
 #endif // EXPRESSION_PARSER_H

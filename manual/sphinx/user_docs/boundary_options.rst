@@ -41,6 +41,11 @@ brackets. Currently implemented boundary conditions are:
 
 -  ``neumann`` - Zero gradient
 
+-  ``dirichlet_node(<value>)`` - Set every boundary cell to the value
+   evaluated at that cell's own position, not half way to the
+   neighbouring cell. For the wall nodes of unstructured FCI grids, which
+   are stored in the x guard cells (see :ref:`sec-fci-unstructured`)
+
 -  ``robin`` - A combination of zero-gradient and zero-value
    :math:`a f + b{{\frac{\partial f}{\partial x}}} = g` where the
    syntax is ``robin(a, b, g)``.

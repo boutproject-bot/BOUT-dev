@@ -60,7 +60,8 @@ test . != ".$1" && mpi="$1" || mpi=openmpi
 	 -DBOUT_UPDATE_GIT_SUBMODULE=OFF \
 	 -DBOUT_USE_SYSTEM_FMT=ON \
 	 -DBOUT_USE_SYSTEM_MPARK_VARIANT=ON \
-	 -DBOUT_USE_SUNDIALS=ON \
+	 -DBOUT_USE_SUNDIALS=OFF \
+	 -DBOUT_USE_PVODE=ON \
 	 -DBOUT_USE_SYSTEM_CPPTRACE=ON
 
     time make -C build build-check -j 2

@@ -4,12 +4,12 @@
 
 
 import os
+
+import numpy as np
 import pytest
-
-from boututils.run_wrapper import launch_safe
-from boututils.datafile import DataFile
 from boutdata.collect import collect as _collect
-
+from boututils.datafile import DataFile
+from boututils.run_wrapper import launch_safe
 from numpy.testing import assert_allclose
 
 if not os.path.exists(os.path.join(os.path.dirname(__file__), "grid.fci.nc")):
@@ -65,7 +65,7 @@ def test_fci_boundary():
 
     for nproc in nprocs:
         cmd = "./get_par_bndry"
-        _, out = launch_safe(cmd, nproc=nproc, mthread=mthread, pipe=True)
+        _, _out = launch_safe(cmd, nproc=nproc, mthread=mthread, pipe=True)
 
     for k, v in regions.items():
         data = collect(f"field_{k}")
@@ -74,3 +74,14 @@ def test_fci_boundary():
         name = f"ybndry_{i}"
         data = collect(name)
         assert_allclose(bndrys[name], data)
+
+    # Points with a boundary in both directions have no valid neighbouring
+    # point (MYG = 1: |(-1) - (+1)| - 2 = 0); all others have one
+    both = (regions["fwd"] > 0) & (regions["bwd"] > 0)
+    assert np.any(both), "The grid should have doubly bounded points"
+    for k in ("xin_fwd", "xout_fwd", "xin_bwd", "xout_bwd"):
+        valid = collect(f"valid_{k}")
+        here = regions[k] > 0
+        expected = np.where(both, 0, 1)
+        assert_allclose(valid[here], expected[here], err_msg=k)
+        assert np.all(valid[~here] == -1), k

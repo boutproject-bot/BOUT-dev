@@ -18,6 +18,7 @@
 #include <bout/openmpwrap.hxx>
 #include <bout/options.hxx>
 #include <bout/output.hxx>
+#include <bout/petsc_operators.hxx>
 #include <bout/region.hxx>
 #include <bout/sys/gettext.hxx>
 #include <bout/sys/range.hxx>
@@ -146,7 +147,13 @@ Mesh::Mesh(GridDataSource* s, Options* opt)
   derivs_init(options); // in index_derivs.cxx for now
 }
 
-Mesh::~Mesh() { delete source; }
+Mesh::~Mesh() {
+#if BOUT_HAS_PETSC
+  // Cached PETSc operators refer to this mesh
+  PetscOperators::Cache::release(this);
+#endif
+  delete source;
+}
 
 /**************************************************************************
  * Functions for reading data from external sources
@@ -343,6 +350,15 @@ int Mesh::get(Vector3D& var, const std::string& name, BoutReal def, bool communi
 }
 
 bool Mesh::isDataSourceGridFile() const { return source != nullptr and source->is_file; }
+
+bool Mesh::isUnstructured() {
+  if (sourceHasVar("unstructured")) {
+    int unstructured{0};
+    get(unstructured, "unstructured", 0);
+    return unstructured != 0;
+  }
+  return false;
+}
 
 bool Mesh::sourceHasVar(const std::string& name) {
   TRACE("Mesh::sourceHasVar({:s})", name);

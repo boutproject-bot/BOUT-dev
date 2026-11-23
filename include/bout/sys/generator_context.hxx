@@ -76,6 +76,9 @@ public:
     return localmesh;
   }
 
+  /// The mesh, or nullptr if the context has none
+  Mesh* getMeshIfSet() const { return localmesh; }
+
 private:
   int ix_{0};
   int jy_{0};

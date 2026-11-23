@@ -3,7 +3,9 @@
 #include <bout/boundary_factory.hxx>
 #include <bout/boundary_region_iter.hxx>
 #include <bout/boundary_standard.hxx>
+#include <bout/field3d.hxx>
 #include <bout/globals.hxx>
+#include <bout/mesh.hxx>
 #include <bout/options.hxx>
 #include <bout/utils.hxx>
 
@@ -25,6 +27,7 @@ BoundaryFactory::BoundaryFactory() {
   add(new BoundaryDirichlet_O3(), "dirichlet_o3");
   add(new BoundaryDirichlet_O4(), "dirichlet_o4");
   add(new BoundaryDirichlet_4thOrder(), "dirichlet_4thorder");
+  add(new BoundaryDirichletNode(), "dirichlet_node"); // Unstructured FCI walls
 
   add(new BoundaryNeumann(), "neumann");       // Default
   add(new BoundaryNeumann_O1(), "neumann_o1"); // Old implementation in v3
@@ -237,6 +240,43 @@ BoundaryFactory::create(const char* name,
   return create(string(name), region);
 }
 
+namespace {
+/// On unstructured meshes the x guard cells may hold Dirichlet wall nodes
+/// (cell_number >= 0; padding cells have -1). Only dirichlet_node sets them
+/// correctly: the other x boundary conditions use the index neighbours,
+/// which are not geometric neighbours on an unstructured mesh.
+BoundaryOpBase* checkWallNodes(const string& varname, const string& set,
+                               const std::shared_ptr<BoundaryRegionBase>& region,
+                               BoundaryOpBase* op) {
+  if ((region->location != BNDRY_XIN && region->location != BNDRY_XOUT)
+      || dynamic_cast<BoundaryDirichletNode*>(op) != nullptr) {
+    return op;
+  }
+  Mesh* mesh = region->localmesh;
+  if (!mesh->isUnstructured() || !mesh->sourceHasVar("cell_number")) {
+    return op;
+  }
+  Field3D cell_number;
+  mesh->get(cell_number, "cell_number", -1.0, false);
+  BoundaryRegion* bndry = region->getLegacyPointer();
+  for (bndry->first(); !bndry->isDone(); bndry->next1d()) {
+    for (int i = 0; i < bndry->width; i++) {
+      if (cell_number(bndry->x + (i * bndry->bx), bndry->y + (i * bndry->by), 0) >= 0) {
+        delete op;
+        throw BoutException(
+            "Boundary condition '{:s}' of '{:s}' on the {:s} region: this unstructured "
+            "grid stores Dirichlet wall nodes in the x guard cells, which only "
+            "'dirichlet_node(value)' sets correctly. Set bndry_{:s} = "
+            "dirichlet_node(...) for '{:s}'.",
+            set, varname, region->label, region->location == BNDRY_XIN ? "xin" : "xout",
+            varname);
+      }
+    }
+  }
+  return op;
+}
+} // namespace
+
 BoundaryOpBase*
 BoundaryFactory::createFromOptions(const string& varname,
                                    const std::shared_ptr<BoundaryRegionBase>& region) {
@@ -336,7 +376,7 @@ BoundaryFactory::createFromOptions(const string& varname,
   for (const auto& side : sides) {
     if (varOpts->isSet(prefix + side)) {
       varOpts->get(prefix + side, set, "");
-      return create(set, region);
+      return checkWallNodes(varname, set, region, create(set, region));
     }
   }
 
@@ -348,7 +388,7 @@ BoundaryFactory::createFromOptions(const string& varname,
     if (varOpts->isSet(prefix + side)) {
       varOpts->get(prefix + side, set,
                    region->isParallel ? "parallel_dirichlet_o2" : "dirichlet");
-      return create(set, region);
+      return checkWallNodes(varname, set, region, create(set, region));
     }
   }
 
@@ -359,7 +399,7 @@ BoundaryFactory::createFromOptions(const string& varname,
   } else {
     varOpts->get(prefix + "all", set, "dirichlet");
   }
-  return create(set, region);
+  return checkWallNodes(varname, set, region, create(set, region));
   // Defaults to Dirichlet conditions, to prevent undefined boundary
   // values. If a user want to override, specify "none" or "null"
 }
