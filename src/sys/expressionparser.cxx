@@ -63,26 +63,39 @@ namespace { // These classes only visible in this file
 
 // Basic generators: Numerical value, 'x', 'y' and 'z'
 
+/// Set when x or z is evaluated on an unstructured mesh (see takeIndexCoordinateUsed)
+std::atomic<bool> index_coordinate_used{false};
+
 /// On unstructured meshes (nodes along x, nz = 1) x is the fraction of the
 /// node index and z is constant, so expressions in x or z are not geometric.
-/// Warn once; geometric coordinates are available as gridvar:R, gridvar:Z.
-/// Generators are evaluated inside OpenMP loops, so the check runs once, in
-/// one thread.
+/// Warn once and record the use, so that FieldFactory can stop after its
+/// evaluation loop; geometric coordinates are available as gridvar:R,
+/// gridvar:Z. Generators are evaluated inside OpenMP loops, so the check
+/// runs once, in one thread, and nothing is thrown here.
 void warnIndexCoordinate(const Context& ctx) {
   static std::atomic<bool> checked{false};
-  if (checked.load(std::memory_order_acquire) || (ctx.getMeshIfSet() == nullptr)) {
-    return;
-  }
-  static std::once_flag once;
-  std::call_once(once, [&ctx]() {
-    if (ctx.getMeshIfSet()->isUnstructured()) {
-      output_warn.write("WARNING: an input expression uses the index coordinate x or z "
-                        "on an unstructured mesh, where they are not geometric (x is the "
-                        "node-index fraction, z is constant). Use grid variables (e.g. "
-                        "gridvar:R and gridvar:Z) instead\n");
+  static std::atomic<bool> unstructured{false};
+  if (!checked.load(std::memory_order_acquire)) {
+    if (ctx.getMeshIfSet() == nullptr) {
+      return;
     }
-    checked.store(true, std::memory_order_release);
-  });
+    static std::once_flag once;
+    std::call_once(once, [&ctx]() {
+      if (ctx.getMeshIfSet()->isUnstructured()) {
+        output_warn.write(
+            "WARNING: an input expression uses the index coordinate x or z "
+            "on an unstructured mesh, where they are not geometric (x is the "
+            "node-index fraction, z is constant). Use grid variables (e.g. "
+            "gridvar:R and gridvar:Z) instead\n");
+        unstructured.store(true, std::memory_order_relaxed);
+      }
+      checked.store(true, std::memory_order_release);
+    });
+  }
+  if (unstructured.load(std::memory_order_relaxed)
+      && !index_coordinate_used.load(std::memory_order_relaxed)) {
+    index_coordinate_used.store(true, std::memory_order_relaxed);
+  }
 }
 
 class FieldX : public FieldGenerator {
@@ -218,6 +231,10 @@ private:
 };
 
 } // namespace
+
+bool takeIndexCoordinateUsed() {
+  return index_coordinate_used.exchange(false, std::memory_order_relaxed);
+}
 
 FieldGeneratorPtr FieldBinary::clone(const list<FieldGeneratorPtr> args) {
   if (args.size() != 2) {

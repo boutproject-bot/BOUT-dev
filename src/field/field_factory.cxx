@@ -57,6 +57,23 @@ FieldGeneratorPtr generator(BoutReal* ptr) {
 BOUT_ENUM_CLASS(GridVariableFunction, field3d, field2d, boutreal);
 
 namespace {
+/// Stop if the expression just evaluated used the index coordinate x or z
+/// on an unstructured mesh (not geometric there), unless
+/// input:allow_index_coordinates = true. Called after the evaluation loop:
+/// an exception cannot leave an OpenMP region.
+void checkIndexCoordinates() {
+  if (takeIndexCoordinateUsed()
+      && !Options::root()["input"]["allow_index_coordinates"]
+              .doc("Allow the index coordinates x and z in expressions on "
+                   "unstructured meshes")
+              .withDefault<bool>(false)) {
+    throw BoutException("An input expression uses the index coordinate x or z on an "
+                        "unstructured mesh, where they are not geometric. Use grid "
+                        "variables (e.g. gridvar:R and gridvar:Z) instead, or set "
+                        "input:allow_index_coordinates = true");
+  }
+}
+
 /// Provides a placeholder whose target can be changed after creation.
 /// This enables recursive FieldGenerator expressions to be generated
 class FieldIndirect : public FieldGenerator {
@@ -265,9 +282,11 @@ Field2D FieldFactory::create2D(FieldGeneratorPtr gen, Mesh* localmesh, CELL_LOC 
   result.allocate();
   result.setLocation(loc);
 
+  takeIndexCoordinateUsed();
   BOUT_FOR(i, result.getRegion("RGN_ALL")) {
     result[i] = gen->generate(Context(i, loc, localmesh, t));
   };
+  checkIndexCoordinates();
 
   return result;
 }
@@ -296,9 +315,11 @@ Field3D FieldFactory::create3D(FieldGeneratorPtr gen, Mesh* localmesh, CELL_LOC 
 
   auto result = Field3D(localmesh).setLocation(loc).setDirectionY(y_direction).allocate();
 
+  takeIndexCoordinateUsed();
   BOUT_FOR(i, result.getRegion("RGN_ALL")) {
     result[i] = gen->generate(Context(i, loc, localmesh, t));
   };
+  checkIndexCoordinates();
 
   if (transform_from_field_aligned) {
     if (auto coords = result.getCoordinates(); coords == nullptr) {
@@ -346,9 +367,11 @@ FieldPerp FieldFactory::createPerp(FieldGeneratorPtr gen, Mesh* localmesh, CELL_
   auto result =
       FieldPerp(localmesh).setLocation(loc).setDirectionY(y_direction).allocate();
 
+  takeIndexCoordinateUsed();
   BOUT_FOR(i, result.getRegion("RGN_ALL")) {
     result[i] = gen->generate(Context(i, loc, localmesh, t));
   };
+  checkIndexCoordinates();
 
   if (transform_from_field_aligned) {
     if (auto coords = result.getCoordinates(); coords == nullptr) {

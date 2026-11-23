@@ -275,7 +275,8 @@ In brief:
   allowed value.
 
 Because x and z are index coordinates, input expressions should use the
-grid geometry instead, for example
+grid geometry instead (an expression in x or z stops with an error unless
+``input:allow_index_coordinates = true``), for example
 
 .. code-block:: cfg
 
