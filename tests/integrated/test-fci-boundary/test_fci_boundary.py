@@ -4,13 +4,12 @@
 
 
 import os
+
 import numpy as np
 import pytest
-
-from boututils.run_wrapper import launch_safe
-from boututils.datafile import DataFile
 from boutdata.collect import collect as _collect
-
+from boututils.datafile import DataFile
+from boututils.run_wrapper import launch_safe
 from numpy.testing import assert_allclose
 
 if not os.path.exists(os.path.join(os.path.dirname(__file__), "grid.fci.nc")):
@@ -66,7 +65,7 @@ def test_fci_boundary():
 
     for nproc in nprocs:
         cmd = "./get_par_bndry"
-        _, out = launch_safe(cmd, nproc=nproc, mthread=mthread, pipe=True)
+        _, _out = launch_safe(cmd, nproc=nproc, mthread=mthread, pipe=True)
 
     for k, v in regions.items():
         data = collect(f"field_{k}")

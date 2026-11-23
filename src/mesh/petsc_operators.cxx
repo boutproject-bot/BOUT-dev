@@ -467,12 +467,12 @@ PetscOperators::Parallel PetscOperators::getParallel() const {
     dl_file.yup() = 0.0;
     dl_file.ydown() = 0.0;
     dl_file.applyParallelBoundary("parallel_neumann_o1");
-    loadK2(par, PetscForwardLegVector::pointwiseMultiply(dV_leg_plus, inv_dl_plus),
-           PetscBackwardLegVector::pointwiseMultiply(dV_leg_minus, inv_dl_minus),
-           PetscForwardLegVector::pointwiseMultiply(par.Interp_plus(dl_file),
-                                                    inv_dl_plus),
-           PetscBackwardLegVector::pointwiseMultiply(par.Interp_minus(dl_file),
-                                                     inv_dl_minus));
+    loadK2(
+        par, PetscForwardLegVector::pointwiseMultiply(dV_leg_plus, inv_dl_plus),
+        PetscBackwardLegVector::pointwiseMultiply(dV_leg_minus, inv_dl_minus),
+        PetscForwardLegVector::pointwiseMultiply(par.Interp_plus(dl_file), inv_dl_plus),
+        PetscBackwardLegVector::pointwiseMultiply(par.Interp_minus(dl_file),
+                                                  inv_dl_minus));
   }
   return par;
 }

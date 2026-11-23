@@ -155,7 +155,7 @@ public:
     Context new_context{ctx};
 
     // Set values in the context by evaluating the generators
-    for (auto const& var : variables) {
+    for (const auto& var : variables) {
       new_context.set(var.first, var.second->generate(ctx));
     }
 
@@ -164,7 +164,7 @@ public:
   }
   std::string str() const override {
     auto result = "["s;
-    for (auto const& var : variables) {
+    for (const auto& var : variables) {
       result += var.first + "="s + var.second->str() + ","s;
     }
     result += "]("s + expr->str() + ")"s;
