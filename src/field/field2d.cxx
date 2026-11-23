@@ -194,51 +194,56 @@ namespace {
 /// Dirichlet wall nodes of an unstructured grid (see field3d.cxx)
 const Region<Ind2D>& wallNodes(Mesh* mesh) {
   static const Region<Ind2D> none{};
+  const std::string name = "RGN_WALL_NODES";
+  if (mesh->hasRegion2D(name)) {
+    return mesh->getRegion2D(name);
+  }
   if (!mesh->isUnstructured()) {
     return none;
   }
-  const std::string name = "RGN_WALL_NODES";
-  if (!mesh->hasRegion2D(name)) {
-    Field3D cell_number{mesh};
-    cell_number = -1.0;
-    if (mesh->sourceHasVar("cell_number")) {
-      mesh->get(cell_number, "cell_number", -1.0, false);
-    }
-    Region<Ind2D>::RegionIndices indices;
-    for (int x = 0; x < mesh->LocalNx; x++) {
-      if (!((mesh->firstX() && x < mesh->xstart) || (mesh->lastX() && x > mesh->xend))) {
-        continue;
-      }
-      for (int y = mesh->ystart; y <= mesh->yend; y++) {
-        if (cell_number(x, y, 0) >= 0) {
-          indices.emplace_back((x * mesh->LocalNy) + y, mesh->LocalNy, 1);
-        }
-      }
-    }
-    mesh->addRegion2D(name, Region<Ind2D>(indices));
+  Field3D cell_number{mesh};
+  cell_number = -1.0;
+  if (mesh->sourceHasVar("cell_number")) {
+    mesh->get(cell_number, "cell_number", -1.0, false);
   }
+  Region<Ind2D>::RegionIndices indices;
+  for (const auto* side : {"RGN_INNER_X", "RGN_OUTER_X"}) {
+    BOUT_FOR_SERIAL(i, mesh->getRegion2D(side)) {
+      if (cell_number(i.x(), i.y(), 0) >= 0) {
+        indices.push_back(i);
+      }
+    }
+  }
+  mesh->addRegion2D(name, Region<Ind2D>(indices));
   return mesh->getRegion2D(name);
 }
 
-/// Keep the wall-node values during boundary conditions applied by name
-/// (see field3d.cxx)
+/// Keep the wall-node values during boundary conditions applied by name,
+/// except dirichlet_node (see field3d.cxx)
 class KeepWallNodes {
 public:
-  explicit KeepWallNodes(Field2D& field)
-      : field(field), region(wallNodes(field.getMesh())) {
-    values.reserve(region.size());
-    BOUT_FOR_SERIAL(i, region) { values.push_back(field[i]); }
+  KeepWallNodes(Field2D& field, const std::string& condition) : field(field) {
+    if (condition.rfind("dirichlet_node", 0) == 0) {
+      return;
+    }
+    const auto& region = wallNodes(field.getMesh());
+    indices = region.getIndices();
+    values.reserve(indices.size());
+    for (const auto& i : indices) {
+      values.push_back(field[i]);
+    }
   }
   KeepWallNodes(const KeepWallNodes&) = delete;
   KeepWallNodes& operator=(const KeepWallNodes&) = delete;
   ~KeepWallNodes() {
-    std::size_t k = 0;
-    BOUT_FOR_SERIAL(i, region) { field[i] = values[k++]; }
+    for (std::size_t k = 0; k < indices.size(); ++k) {
+      field[indices[k]] = values[k];
+    }
   }
 
 private:
   Field2D& field;
-  const Region<Ind2D>& region;
+  Region<Ind2D>::RegionIndices indices;
   std::vector<BoutReal> values;
 };
 } // namespace
@@ -282,7 +287,7 @@ void Field2D::applyBoundary(BoutReal time) {
 void Field2D::applyBoundary(const std::string& condition) {
 
   checkData(*this);
-  const KeepWallNodes keep_wall_nodes(*this);
+  const KeepWallNodes keep_wall_nodes(*this, condition);
 
   /// Get the boundary factory (singleton)
   BoundaryFactory* bfact = BoundaryFactory::getInstance();
@@ -316,7 +321,7 @@ void Field2D::applyBoundary(const std::string& condition) {
 void Field2D::applyBoundary(const std::string& region, const std::string& condition) {
 
   checkData(*this);
-  const KeepWallNodes keep_wall_nodes(*this);
+  const KeepWallNodes keep_wall_nodes(*this, condition);
 
   /// Get the boundary factory (singleton)
   BoundaryFactory* bfact = BoundaryFactory::getInstance();
