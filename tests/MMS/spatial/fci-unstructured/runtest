@@ -125,8 +125,9 @@ def gridfile(n: int) -> str:
     return f"mesh.{n}.fci.nc"
 
 
-# zoidberg writes the K2 matrices by default; grids whose checks do
-# not use them are generated without, to save time
+# The grids whose checks use the K2 matrices request them (zoidberg writes
+# them by default only with centroid unknowns); the others are generated
+# without, to save time
 ZOIDBERG_K2 = "k2" in inspect.signature(zu.build_grid_data).parameters
 
 

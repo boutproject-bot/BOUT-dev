@@ -47,6 +47,7 @@
 # called as `$BOUT_TEST_K2_HOOK FILE FAMILY` with FAMILY "petsc_slab" or
 # "petsc_slab_tilted".
 
+import inspect
 import os
 import pathlib
 import shlex
@@ -58,7 +59,11 @@ from boutdata.collect import collect
 from boututils.run_wrapper import build_and_log, launch_safe
 from netCDF4 import Dataset
 from zoidberg.field import Slab
-from zoidberg.unstructured import UnstructuredPoloidalGrid, make_unstructured_grid
+from zoidberg.unstructured import (
+    UnstructuredPoloidalGrid,
+    build_grid_data,
+    make_unstructured_grid,
+)
 
 
 def run(nproc, args, path=None):
@@ -215,6 +220,8 @@ def has_k2(filename):
 
 
 def make_grid(filename, Bz, family):
+    # zoidberg writes K2 by default only with centroid unknowns
+    k2 = {"k2": True} if "k2" in inspect.signature(build_grid_data).parameters else {}
     pol = UnstructuredPoloidalGrid.slab(
         5, 4, 1.0, 1.0, R0=1.5, jitter=0.2, jitter_dirs="z", periodic_Z=True, seed=7
     )
@@ -225,6 +232,7 @@ def make_grid(filename, Bz, family):
         ny=16,
         Ly=10.0,
         walls_y=True,
+        **k2,
     )
     hook = os.environ.get("BOUT_TEST_K2_HOOK")
     if hook and not has_k2(filename):
@@ -235,7 +243,7 @@ def make_grid(filename, Bz, family):
 def k2_unavailable(filename):
     message = (
         f"SKIPPED: K2 checks on {filename}: the grid has no K2 matrices "
-        "(k2_forward_weights); zoidberg does not write them"
+        "(k2_forward_weights); this zoidberg does not write them"
     )
     print(message)
     if os.environ.get("BOUT_TEST_REQUIRE_K2", "0") not in ("", "0"):
