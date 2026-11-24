@@ -1087,6 +1087,10 @@ Field3D Div_a_Grad_perp_FCI_unstructured::operator()(const Field3D& a, const Fie
                                                      bool upwinding) const {
   return impl->apply(a, f, upwinding, &flow_xlow, &flow_zlow);
 }
+
+PetscCellOperator Div_a_Grad_perp_FCI_unstructured::coupling() const {
+  return impl->div * (impl->grad + impl->value);
+}
 #else
 Div_a_Grad_perp_FCI_unstructured::Div_a_Grad_perp_FCI_unstructured(
     [[maybe_unused]] Mesh* mesh, [[maybe_unused]] BoutReal rho_s0) {

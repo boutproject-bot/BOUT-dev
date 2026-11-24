@@ -956,6 +956,15 @@ e.g. for N == 2
       * * *
         *
 
+On unstructured meshes these index-space stencils do not describe
+neighbours. There each cell is coupled to the cells that the operators
+stored in the grid file couple: the parallel interpolation maps, over
+``solver:stencil:parallel_hops`` steps along the magnetic field in
+either direction (default 2), and the flux-reconstructed parallel
+divergence and the perpendicular operator, if the grid file has them.
+Two steps cover the parallel support operators, whose divergence is the
+transpose of their gradient. Only ``Field3D`` variables are supported.
+
 Setting ``solver:force_symmetric_coloring = true``, will make sure
 that the jacobian colouring matrix is symmetric.  This will often
 include a few extra non-zeros that the stencil will miss otherwise
