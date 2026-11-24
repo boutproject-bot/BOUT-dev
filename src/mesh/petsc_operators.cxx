@@ -776,74 +776,71 @@ PetscCellOperator makeNeumannOperator(const PetscCellMappingPtr& mapping,
   return PetscCellOperator(mapping, mapping, std::move(out));
 }
 
-Field3D PetscOperators::computeYup(const Field3D& f) const {
-  ASSERT1(f.hasParallelSlices());
-  ASSERT1(f.yup().isAllocated());
-  ASSERT1(f.ydown().isAllocated());
+template <typename LegTag>
+PetscOperators::SliceWork<LegTag>
+PetscOperators::makeSliceWork(PetscOperator<LegTag, CellSpaceTag> interpolate,
+                              const Field3D& interior_leg_number,
+                              const PetscLegMappingPtr& leg_mapping, int y_offset) const {
+  SliceWork<LegTag> work{std::move(interpolate),
+                         PetscCellVector(cell_mapping),
+                         PetscSpaceVector<LegTag>(leg_mapping),
+                         {},
+                         {}};
+  BOUT_DO_PETSC(VecSet(work.cells.raw(), 0.0));
+  cell_mapping->mapLocalField([&](PetscInt row, const Ind3D& i) {
+    ASSERT1(row == static_cast<PetscInt>(work.field_cells.size()));
+    work.field_cells.push_back(i);
+  });
+  const PetscInt leg_row_start = leg_mapping->rowStart();
+  cell_mapping->mapOwnedInteriorCells([&](PetscInt /*cell_row*/, const Ind3D& i, int) {
+    const int interior = ROUND(interior_leg_number[i]);
+    if (interior >= 0) {
+      work.slice_points.emplace_back(i.yp(y_offset), leg_mapping->storedToPetsc(interior)
+                                                         - leg_row_start);
+    }
+  });
+  return work;
+}
 
-  if (!cache_forward.has_value()) {
-    cache_forward = this->forward();
+template <typename LegTag>
+Field3D PetscOperators::computeSlice(const Field3D& f, SliceWork<LegTag>& work) const {
+  PetscScalar* x{nullptr};
+  BOUT_DO_PETSC(VecGetArray(work.cells.raw(), &x));
+  for (std::size_t row = 0; row < work.field_cells.size(); ++row) {
+    x[row] = f[work.field_cells[row]];
   }
-  auto leg = cache_forward.value()(f);
+  BOUT_DO_PETSC(VecRestoreArray(work.cells.raw(), &x));
 
-  const PetscScalar* leg_x{nullptr};
-  BOUT_DO_PETSC(VecGetArrayRead(leg.raw(), &leg_x));
+  work.interpolate.apply(work.cells, work.legs);
 
   // Points without an interior leg (field line leaves the domain) are
   // parallel boundary points, which boundary conditions set: leave them zero
   Field3D result{zeroFrom(f)};
 
-  const PetscInt leg_row_start = forward_leg_mapping->rowStart();
-
-  cell_mapping->mapOwnedInteriorCells([&](PetscInt /*cell_row*/, const Ind3D& i, int) {
-    const int interior = ROUND(forward_leg_interior_number[i]);
-
-    BoutReal value = 0.0;
-    if (interior >= 0) {
-      const PetscInt row = forward_leg_mapping->storedToPetsc(interior) - leg_row_start;
-      value = leg_x[row];
-    }
-    result[i.yp()] = value;
-  });
-
-  BOUT_DO_PETSC(VecRestoreArrayRead(leg.raw(), &leg_x));
+  const PetscScalar* leg_x{nullptr};
+  BOUT_DO_PETSC(VecGetArrayRead(work.legs.raw(), &leg_x));
+  for (const auto& [i, leg_row] : work.slice_points) {
+    result[i] = leg_x[leg_row];
+  }
+  BOUT_DO_PETSC(VecRestoreArrayRead(work.legs.raw(), &leg_x));
 
   return result;
 }
 
-Field3D PetscOperators::computeYdown(const Field3D& f) const {
-  ASSERT1(f.hasParallelSlices());
-  ASSERT1(f.yup().isAllocated());
-  ASSERT1(f.ydown().isAllocated());
-
-  if (!cache_backward.has_value()) {
-    cache_backward = this->backward();
+Field3D PetscOperators::computeYup(const Field3D& f) const {
+  if (!forward_slice.has_value()) {
+    forward_slice =
+        makeSliceWork(forward(), forward_leg_interior_number, forward_leg_mapping, +1);
   }
-  auto leg = cache_backward.value()(f);
+  return computeSlice(f, *forward_slice);
+}
 
-  const PetscScalar* leg_x{nullptr};
-  BOUT_DO_PETSC(VecGetArrayRead(leg.raw(), &leg_x));
-
-  // Points without an interior leg (field line leaves the domain) are
-  // parallel boundary points, which boundary conditions set: leave them zero
-  Field3D result{zeroFrom(f)};
-
-  const PetscInt leg_row_start = backward_leg_mapping->rowStart();
-
-  cell_mapping->mapOwnedInteriorCells([&](PetscInt /*cell_row*/, const Ind3D& i, int) {
-    const int interior = ROUND(backward_leg_interior_number[i]);
-
-    BoutReal value = 0.0;
-    if (interior >= 0) {
-      const PetscInt row = backward_leg_mapping->storedToPetsc(interior) - leg_row_start;
-      value = leg_x[row];
-    }
-    result[i.ym()] = value;
-  });
-
-  BOUT_DO_PETSC(VecRestoreArrayRead(leg.raw(), &leg_x));
-
-  return result;
+Field3D PetscOperators::computeYdown(const Field3D& f) const {
+  if (!backward_slice.has_value()) {
+    backward_slice =
+        makeSliceWork(backward(), backward_leg_interior_number, backward_leg_mapping, -1);
+  }
+  return computeSlice(f, *backward_slice);
 }
 
 std::shared_ptr<PetscOperators> PetscOperators::Cache::get(Mesh* mesh) {

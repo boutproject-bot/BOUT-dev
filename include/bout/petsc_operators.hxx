@@ -948,21 +948,23 @@ public:
   /// @brief Compute the forward (y+1) parallel slice using the same
   ///        interpolation weights used by the SOM parallel operators.
   ///
-  /// Requires f.yup() to already hold valid values for the small subset of
-  /// cells whose forward map lies entirely outside the domain (boundary
-  /// virtual cells) -- these are inputs (e.g. from a physics boundary
-  /// condition), not computed here.
+  /// Only the values of @p f in the interior and X-boundary cells are used:
+  /// interior legs do not reach the parallel boundary (virtual) cells, which
+  /// are taken to be zero. Points whose field line leaves the domain have no
+  /// interior leg and are zero in the result; boundary conditions set them.
   ///
-  /// @param f Field whose yup() slice should be (re)computed. Must have
-  ///          parallel slices allocated.
+  /// @param f Field whose yup() slice should be (re)computed. Its parallel
+  ///          slices are not needed.
   /// @returns A Field3D containing the forward-interpolated values, indexed
   ///          the same way as f.yup() (i.e. at i.yp()).
   Field3D computeYup(const Field3D& f) const;
 
   /// @brief Compute the backward parallel slice using the SOM weights.
   ///
-  /// @param f Field whose ydown() slice should be (re)computed. Must have
-  ///          parallel slices allocated.
+  /// See @ref computeYup.
+  ///
+  /// @param f Field whose ydown() slice should be (re)computed. Its parallel
+  ///          slices are not needed.
   /// @returns A Field3D containing the backward-interpolated values, indexed
   ///          the same way as f.ydown() (i.e. at i.ym()).
   Field3D computeYdown(const Field3D& f) const;
@@ -1119,8 +1121,30 @@ private:
   Operator readK2Operator(const std::string& direction,
                           const PetscLegMappingPtr& leg_mapping) const;
 
-  mutable std::optional<PetscForwardOperator> cache_forward;
-  mutable std::optional<PetscBackwardOperator> cache_backward;
+  /// What computeYup or computeYdown needs, set up on their first call and
+  /// reused afterwards
+  template <typename LegTag>
+  struct SliceWork {
+    PetscOperator<LegTag, CellSpaceTag> interpolate;
+    PetscCellVector cells; ///< Values of the field; virtual cells stay zero
+    PetscSpaceVector<LegTag> legs;
+    std::vector<Ind3D> field_cells; ///< Cell of each local field entry in @c cells
+    /// Points of the slice that have an interior leg, and the local leg row
+    std::vector<std::pair<Ind3D, PetscInt>> slice_points;
+  };
+  mutable std::optional<SliceWork<ForwardLegSpaceTag>> forward_slice;
+  mutable std::optional<SliceWork<BackwardLegSpaceTag>> backward_slice;
+
+  /// Set up the work for the slice at offset @p y_offset (+1 or -1)
+  template <typename LegTag>
+  SliceWork<LegTag> makeSliceWork(PetscOperator<LegTag, CellSpaceTag> interpolate,
+                                  const Field3D& interior_leg_number,
+                                  const PetscLegMappingPtr& leg_mapping,
+                                  int y_offset) const;
+
+  template <typename LegTag>
+  Field3D computeSlice(const Field3D& f, SliceWork<LegTag>& work) const;
+
   /// @brief Read a Field3D from the mesh, throwing if the field is absent.
   ///
   /// @param mesh Non-owning mesh pointer.
