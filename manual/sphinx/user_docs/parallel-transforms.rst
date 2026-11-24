@@ -244,6 +244,11 @@ In brief:
      [mesh:paralleltransform:xzinterpolation]
      type = precomputed
 
+  The sparse products exchange the data they need between processors, so
+  ``mesh->communicate`` does not exchange the y guard cells on these
+  meshes. With a single poloidal plane per processor the y guard cells are
+  as large as the plane itself.
+
 - ``forward/backward_xt_prime`` only classify points: ``MXG + k`` if the
   field line from node ``k`` stays in the domain, ``-1`` or ``nx`` if it
   hits an inner or outer wall. Parallel boundary points use the node

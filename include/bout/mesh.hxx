@@ -100,7 +100,9 @@ class Mesh {
 public:
   /// Constructor for a "bare", uninitialised Mesh
   /// Only useful for testing
-  Mesh() : source(nullptr), options(nullptr), include_corner_cells(true) {}
+  Mesh()
+      : source(nullptr), options(nullptr), include_corner_cells(true),
+        exchange_y_guards(true) {}
 
   /// Constructor
   /// @param[in] s  The source to be used for loading variables
@@ -840,6 +842,11 @@ public:
 
   // Switch for communication of corner guard and boundary cells
   const bool include_corner_cells;
+
+  /// Exchange the y guard cells in communicate(). Not on unstructured
+  /// meshes: their parallel slices come from the stored maps, whose sparse
+  /// products exchange the data they need themselves
+  const bool exchange_y_guards;
 
   std::optional<size_t> getCommonRegion(std::optional<size_t> lhs,
                                         std::optional<size_t> rhs);

@@ -138,7 +138,8 @@ Mesh::Mesh(GridDataSource* s, Options* opt)
                    "for example if your grid has orthogonal x- and "
                    "y-directions. This might slightly reduce communication "
                    "time.")
-              .withDefault(true)) {
+              .withDefault(true)),
+      exchange_y_guards(not isUnstructured()) {
 
   if (s == nullptr) {
     throw BoutException("GridDataSource passed to Mesh::Mesh() is NULL");
@@ -405,7 +406,13 @@ void Mesh::communicateYZ(FieldGroup& g) {
 
 void Mesh::communicate(FieldGroup& g) {
 
-  if (include_corner_cells) {
+  if (not exchange_y_guards) {
+    // Send data in x-direction only
+    comm_handle h = sendX(g);
+
+    // Wait for data from other processors
+    wait(h);
+  } else if (include_corner_cells) {
     // Send data in y-direction
     comm_handle h = sendY(g);
 
