@@ -30,6 +30,8 @@ OPERATORS = (
     "laplace_par",
     "FV_div_par_mod",
     "FV_div_par_fvv",
+    "FV_div_par_mod_reconstruct",
+    "FV_div_par_fvv_reconstruct",
 )
 
 # div_par_fvv is also tested in ../finite-volume, where 1.5th order is achieved
