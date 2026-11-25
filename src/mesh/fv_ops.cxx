@@ -858,6 +858,8 @@ struct Div_a_Grad_perp_FCI_unstructured::Impl {
   /// Optional: cell average of the flux vector -a grad f (R and Z components)
   std::optional<PetscFacePointToCellOperator> flowR;
   std::optional<PetscFacePointToCellOperator> flowZ;
+  /// Flow into the Dirichlet wall nodes per unit volume (if there are any)
+  std::optional<PetscFacePointToCellOperator> wall;
   BoutReal rho_s0;
 
   /// Work vectors reused between calls (no PETSc allocations per call)
@@ -868,7 +870,7 @@ struct Div_a_Grad_perp_FCI_unstructured::Impl {
   mutable std::optional<Work> work;
 
   Field3D apply(const Field3D& a, const Field3D& f, bool upwinding, Field3D* flow_R,
-                Field3D* flow_Z) const;
+                Field3D* flow_Z, Field3D* wall_out) const;
 };
 
 namespace {
@@ -979,7 +981,40 @@ Div_a_Grad_perp_FCI_unstructured::Div_a_Grad_perp_FCI_unstructured(Mesh* mesh,
       PetscCellToFacePointOperator(faces, cells, value_rows, value_cols, value_weights),
       PetscFacePointToCellOperator(cells, faces, div_rows, div_cols, div_weights)
           * SQ(rho_s0),
-      std::nullopt, std::nullopt, std::nullopt, std::nullopt, rho_s0});
+      std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, rho_s0});
+
+  // Flow into the walls: a face point between an evolving node and a
+  // Dirichlet wall node is in the divergence row of the evolving node only
+  // (wall nodes have no row). That part of the divergence, with the sign
+  // reversed, is the flow from the cell into the wall per unit volume.
+  std::vector<int> rows_per_facepoint(n_facepoints, 0);
+  for (const int column : div_cols) {
+    ++rows_per_facepoint[column];
+  }
+  std::vector<int> wall_rows{0};
+  std::vector<int> wall_cols;
+  std::vector<BoutReal> wall_weights;
+  for (int row = 0; row + 1 < div_rows.size(); ++row) {
+    for (int k = div_rows[row]; k < div_rows[row + 1]; ++k) {
+      if (rows_per_facepoint[div_cols[k]] == 1) {
+        wall_cols.push_back(div_cols[k]);
+        wall_weights.push_back(-div_weights[k]);
+      }
+    }
+    wall_rows.push_back(static_cast<int>(wall_cols.size()));
+  }
+  if (not wall_cols.empty()) {
+    const auto to_array = [](const auto& values) {
+      Array<typename std::decay_t<decltype(values)>::value_type> result(
+          static_cast<int>(values.size()));
+      std::copy(values.begin(), values.end(), result.begin());
+      return result;
+    };
+    impl->wall.emplace(PetscFacePointToCellOperator(cells, faces, to_array(wall_rows),
+                                                    to_array(wall_cols),
+                                                    to_array(wall_weights))
+                       * SQ(rho_s0));
+  }
 
   if (mesh->sourceHasVar("dagp_us_left_rows")) {
     auto [l_rows, l_cols, l_weights] = read("dagp_us_left", n_cells, false);
@@ -1003,7 +1038,8 @@ Div_a_Grad_perp_FCI_unstructured::Div_a_Grad_perp_FCI_unstructured(Mesh* mesh,
 
 Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Field3D& f,
                                                       bool upwinding, Field3D* flow_R,
-                                                      Field3D* flow_Z) const {
+                                                      Field3D* flow_Z,
+                                                      Field3D* wall_out) const {
   ASSERT1_FIELDS_COMPATIBLE(a, f);
   const auto& cells = ops->cellMapping();
   if (not work) {
@@ -1070,6 +1106,15 @@ Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Fi
     flow_R->setRegion("RGN_NOBNDRY");
     flow_Z->setRegion("RGN_NOBNDRY");
   }
+  if (wall_out != nullptr) {
+    if (wall) {
+      wall->apply(flux, w.cells_out);
+      *wall_out = unpackCells(w.cells_out, f);
+    } else {
+      *wall_out = zeroFrom(f);
+    }
+    wall_out->setRegion("RGN_NOBNDRY");
+  }
   div.apply(flux, w.cells_out);
   auto result = unpackCells(w.cells_out, f);
   result.setRegion("RGN_NOBNDRY");
@@ -1078,14 +1123,22 @@ Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Fi
 
 Field3D Div_a_Grad_perp_FCI_unstructured::operator()(const Field3D& a, const Field3D& f,
                                                      bool upwinding) const {
-  return impl->apply(a, f, upwinding, nullptr, nullptr);
+  return impl->apply(a, f, upwinding, nullptr, nullptr, nullptr);
 }
 
 Field3D Div_a_Grad_perp_FCI_unstructured::operator()(const Field3D& a, const Field3D& f,
                                                      Field3D& flow_xlow,
                                                      Field3D& flow_zlow,
                                                      bool upwinding) const {
-  return impl->apply(a, f, upwinding, &flow_xlow, &flow_zlow);
+  return impl->apply(a, f, upwinding, &flow_xlow, &flow_zlow, nullptr);
+}
+
+Field3D Div_a_Grad_perp_FCI_unstructured::operator()(const Field3D& a, const Field3D& f,
+                                                     Field3D& flow_xlow,
+                                                     Field3D& flow_zlow,
+                                                     Field3D& wall_outflow,
+                                                     bool upwinding) const {
+  return impl->apply(a, f, upwinding, &flow_xlow, &flow_zlow, &wall_outflow);
 }
 #else
 Div_a_Grad_perp_FCI_unstructured::Div_a_Grad_perp_FCI_unstructured(
@@ -1106,6 +1159,24 @@ Field3D Div_a_Grad_perp_FCI_unstructured::operator()(
     [[maybe_unused]] bool upwinding) const {
   throw BoutException("Compile BOUT++ with PETSc to run on unstructured meshes!");
 }
+
+Field3D Div_a_Grad_perp_FCI_unstructured::operator()(
+    [[maybe_unused]] const Field3D& a, [[maybe_unused]] const Field3D& f,
+    [[maybe_unused]] Field3D& flow_xlow, [[maybe_unused]] Field3D& flow_zlow,
+    [[maybe_unused]] Field3D& wall_outflow, [[maybe_unused]] bool upwinding) const {
+  throw BoutException("Compile BOUT++ with PETSc to run on unstructured meshes!");
+}
 #endif
+
+Field3D Div_a_Grad_perp_FCI::operator()([[maybe_unused]] const Field3D& a,
+                                        [[maybe_unused]] const Field3D& f,
+                                        [[maybe_unused]] Field3D& flow_xlow,
+                                        [[maybe_unused]] Field3D& flow_zlow,
+                                        [[maybe_unused]] Field3D& wall_outflow,
+                                        [[maybe_unused]] bool upwinding) const {
+  throw BoutException("The flow into the walls is only available on unstructured "
+                      "meshes; on structured meshes flow_xlow gives the flows at the "
+                      "x boundaries");
+}
 
 } // Namespace FV

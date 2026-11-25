@@ -334,7 +334,8 @@ int main(int argc, char** argv) {
     const auto dagp = FV::Div_a_Grad_perp_FCI::create(mesh, 1.0);
     Field3D flow_R;
     Field3D flow_Z;
-    const Field3D dagp_result = (*dagp)(K, input, flow_R, flow_Z, false);
+    Field3D wall_outflow;
+    const Field3D dagp_result = (*dagp)(K, input, flow_R, flow_Z, wall_outflow, false);
     fci_op_test("FV_div_a_grad_perp", dump, input, dagp_result);
     fci_op_test("FV_div_a_grad_perp_flowZ", dump, input, flow_Z);
     fci_op_test("FV_div_a_grad_perp_upwind", dump, input, (*dagp)(K, input, true));
@@ -345,6 +346,14 @@ int main(int argc, char** argv) {
     mesh->get(volume, "dagp_us_volume", 0.0, false);
     dump["FV_div_a_grad_perp_integral"] =
         mean(volume * dagp_result, true, "RGN_NOBNDRY")
+        / mean(volume * abs(dagp_result), true, "RGN_NOBNDRY");
+    // With Dirichlet wall nodes the flow into the walls closes the balance
+    // (and is zero on closed planes)
+    dump["FV_div_a_grad_perp_wall_integral"] =
+        mean(volume * (dagp_result + wall_outflow), true, "RGN_NOBNDRY")
+        / mean(volume * abs(dagp_result), true, "RGN_NOBNDRY");
+    dump["FV_div_a_grad_perp_wall_flow"] =
+        mean(volume * abs(wall_outflow), true, "RGN_NOBNDRY")
         / mean(volume * abs(dagp_result), true, "RGN_NOBNDRY");
   }
 
