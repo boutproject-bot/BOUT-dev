@@ -6,6 +6,7 @@
 #define BOUT_FV_OPS_H
 
 #include "bout/bout_types.hxx"
+#include "bout/build_defines.hxx"
 #include "bout/field.hxx"
 #include "bout/field3d.hxx"
 #include "bout/mesh.hxx"
@@ -15,6 +16,13 @@
 
 #include <map>
 #include <memory>
+
+#if BOUT_HAS_PETSC
+// From bout/petsc_operators.hxx
+struct CellSpaceTag;
+template <typename Out, typename In>
+class PetscOperator;
+#endif
 
 namespace FV {
 /// Vorticity:
@@ -293,6 +301,12 @@ public:
   ~Div_a_Grad_perp_FCI_unstructured();
 
   static std::shared_ptr<Div_a_Grad_perp_FCI> create(Mesh* mesh, BoutReal rho_s0);
+
+#if BOUT_HAS_PETSC
+  /// The cells that this operator couples, C <- C (the sparsity of
+  /// div * (grad + value)), e.g. for Jacobian sparsity patterns
+  PetscOperator<CellSpaceTag, CellSpaceTag> coupling() const;
+#endif
 
 private:
   static std::map<Mesh*, std::weak_ptr<Div_a_Grad_perp_FCI>> op_cache;

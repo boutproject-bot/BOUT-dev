@@ -1,0 +1,32 @@
+# Unstructured slab with a tilted field, periodic along y (the grid is made by
+# test_jacobian_pattern_unstructured.py)
+
+nout = 1
+timestep = 1e-3
+
+[mesh]
+file = "grid.fci.nc"
+
+[mesh:paralleltransform]
+type = fci
+
+[mesh:paralleltransform:xzinterpolation]
+type = precomputed
+
+[input:grid_variables]
+R = field3d
+Z = field3d
+
+[solver]
+type = snes
+snes_type = newtonls
+use_coloring = true
+matrix_free_operator = true
+save_jacobian = true
+jacobian_export_kind = rhs
+
+[n]
+function = 1 + 0.3 * sin(y) * cos(6.283185307179586 * gridvar:Z) + 0.2 * gridvar:R
+
+[T]
+function = 2 + 0.5 * cos(2 * y) * sin(6.283185307179586 * gridvar:Z) * gridvar:R
