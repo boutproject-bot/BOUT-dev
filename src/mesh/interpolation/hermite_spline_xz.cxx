@@ -552,16 +552,9 @@ PrecomputedInterpolation::interpolate(const Field3D& fin,
   if (y_offset != 1 and y_offset != -1) {
     throw BoutException("PrecomputedInterpolation: offset {} not supported", y_offset);
   }
-  // The operators also read the parallel boundary (virtual) cells of the
-  // input. Interior legs never use them, so set them to zero rather than
-  // leaving them uninitialised.
-  Field3D f = fin;
-  f.splitParallelSlices();
-  f.yup() = 0.0;
-  f.ydown() = 0.0;
   // Points whose field line leaves the domain have no interior leg; they
   // are parallel boundary points (zero here), which boundary conditions set
-  return (y_offset == 1) ? op->computeYup(f) : op->computeYdown(f);
+  return (y_offset == 1) ? op->computeYup(fin) : op->computeYdown(fin);
 #else
   throw BoutException("PrecomputedInterpolation requires PETSc");
 #endif
