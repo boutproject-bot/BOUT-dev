@@ -159,10 +159,15 @@ Field3D Div_Perp_Lap(const Field3D& a, const Field3D& f, CELL_LOC outloc = CELL_
 /// @param[out] flow_ylow    Flow at the lower Y cell boundary
 ///                          Already includes area factor * flux
 ///                          For FCI fields this diagnostic is currently set to zero.
+/// @param[in] reconstruct   For FCI fields: use the fluxes of the field-aligned
+///                          operator, with \p f_in and \p v_in reconstructed at
+///                          the cell faces by CellEdges and split by the wave
+///                          speed, instead of mid-point averages. The flag
+///                          \p dissipative then has no effect.
 template <typename CellEdges = MC>
 Field3D Div_par_mod(const Field3D& f_in, const Field3D& v_in,
                     const Field3D& wave_speed_in, Field3D& flow_ylow, bool fixflux = true,
-                    bool dissipative = false);
+                    bool dissipative = false, bool reconstruct = false);
 
 /// This operator calculates Div_par(f v v)
 /// It is used primarily (only?) in the parallel momentum equation.
@@ -170,9 +175,13 @@ Field3D Div_par_mod(const Field3D& f_in, const Field3D& v_in,
 /// This operator is used rather than Div(f fv) so that the values of
 /// f and v are consistent with other advection equations: The product
 /// fv is not interpolated to cell boundaries.
+///
+/// @param[in] reconstruct   For FCI fields: use the fluxes of the field-aligned
+///                          operator (see Div_par_mod)
 template <typename CellEdges = MC>
 Field3D Div_par_fvv(const Field3D& f_in, const Field3D& v_in,
-                    const Field3D& wave_speed_in, bool fixflux = true);
+                    const Field3D& wave_speed_in, bool fixflux = true,
+                    bool reconstruct = false);
 
 /// Calculates viscous heating due to numerical momentum fluxes
 /// and flow of kinetic energy (in flow_ylow)

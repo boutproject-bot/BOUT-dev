@@ -287,6 +287,31 @@ Slices<T> makeslices(bool use_slices, const T& field) {
   return Slices<T>(use_slices, field);
 }
 
+/// Values of \p f at the lower and upper face of each cell, reconstructed by
+/// \p CellEdges from the cell and its two neighbours along the magnetic field,
+/// which are the parallel slices of \p f.
+///
+/// The results get parallel slices, so that the face values of the
+/// neighbouring cells are `lower.yup()` and `upper.ydown()`.
+template <typename CellEdges>
+void cellEdgesFromSlices(const Field3D& f, Field3D& lower, Field3D& upper) {
+  CellEdges cellboundary;
+
+  const auto& f_up = f.yup();
+  const auto& f_down = f.ydown();
+
+  // Guard cells keep the value of f
+  lower = copy(f);
+  upper = copy(f);
+  BOUT_FOR(i, f.getRegion("RGN_NOBNDRY")) {
+    Stencil1D s{.c = f[i], .m = f_down[i.ym()], .p = f_up[i.yp()]};
+    cellboundary(s); // Calculate s.R and s.L
+    lower[i] = s.L;
+    upper[i] = s.R;
+  }
+  f.getMesh()->communicate(lower, upper);
+}
+
 /// Finite volume parallel divergence
 ///
 /// Preserves the sum of f*J*dx*dy*dz over the domain
@@ -635,7 +660,7 @@ Field3D Div_f_v(const Field3D& n_in, const Vector3D& v, bool bndry_flux) {
 template <typename CellEdges>
 Field3D Div_par_mod(const Field3D& f_in, const Field3D& v_in,
                     const Field3D& wave_speed_in, Field3D& flow_ylow, bool fixflux,
-                    bool dissipative) {
+                    bool dissipative, bool reconstruct) {
 
   Coordinates* coord = f_in.getCoordinates();
   ASSERT1_FIELDS_COMPATIBLE(f_in, v_in);
@@ -659,6 +684,68 @@ Field3D Div_par_mod(const Field3D& f_in, const Field3D& v_in,
     Field3D result{emptyFrom(f_in)};
     flow_ylow = zeroFrom(f_in);
     const auto yboundary = coord->getYBoundary();
+
+    if (reconstruct) {
+      // The fluxes of the field-aligned branch below: values reconstructed at
+      // the cell faces, split by the fastest wave. Each face gets one flux
+      // from the cell on either side; the neighbour's face values are the
+      // parallel slices of the reconstructed fields.
+      Field3D f_low;
+      Field3D f_high;
+      Field3D v_low;
+      Field3D v_high;
+      cellEdgesFromSlices<CellEdges>(f_in, f_low, f_high);
+      cellEdgesFromSlices<CellEdges>(v_in, v_low, v_high);
+
+      const auto& f_low_up = f_low.yup();
+      const auto& f_high_down = f_high.ydown();
+      const auto& v_low_up = v_low.yup();
+      const auto& v_high_down = v_high.ydown();
+
+      BOUT_FOR(i, f_in.getRegion("RGN_NOBNDRY")) {
+        const auto iyp = i.yp();
+        const auto iym = i.ym();
+
+        BoutReal flux_up = BoutNaN;
+        if (yboundary.contains<+1>(i)) {
+          // The field line ends beyond this cell
+          const BoutReal vpar = 0.5 * (v_in[i] + v_up[iyp]);
+          const BoutReal bndryval = 0.5 * (f_in[i] + f_up[iyp]);
+          if (fixflux) {
+            flux_up = bndryval * vpar;
+          } else {
+            flux_up = (f_high[i] * vpar) + (wave_speed_in[i] * (f_high[i] - bndryval));
+          }
+        } else {
+          const BoutReal amax = BOUTMAX(wave_speed_in[i], wave_speed_up[iyp],
+                                        std::abs(v_in[i]), std::abs(v_up[iyp]));
+          flux_up = (f_high[i] * 0.5 * (v_high[i] + amax))
+                    + (f_low_up[iyp] * 0.5 * (v_low_up[iyp] - amax));
+        }
+
+        BoutReal flux_down = BoutNaN;
+        if (yboundary.contains<-1>(i)) {
+          const BoutReal vpar = 0.5 * (v_in[i] + v_down[iym]);
+          const BoutReal bndryval = 0.5 * (f_in[i] + f_down[iym]);
+          if (fixflux) {
+            flux_down = bndryval * vpar;
+          } else {
+            flux_down = (f_low[i] * vpar) - (wave_speed_in[i] * (f_low[i] - bndryval));
+          }
+        } else {
+          const BoutReal amax = BOUTMAX(wave_speed_in[i], wave_speed_down[iym],
+                                        std::abs(v_in[i]), std::abs(v_down[iym]));
+          flux_down = (f_low[i] * 0.5 * (v_low[i] - amax))
+                      + (f_high_down[iym] * 0.5 * (v_high_down[iym] + amax));
+        }
+
+        result[i] = ((flux_up * coord->cell_area_yhigh()[i])
+                     - (flux_down * coord->cell_area_ylow()[i]))
+                    / coord->cell_volume()[i];
+      }
+      return result;
+    }
+
     BOUT_FOR(i, f_in.getRegion("RGN_NOBNDRY")) {
       const auto iyp = i.yp();
       const auto iym = i.ym();
@@ -851,7 +938,7 @@ Field3D Div_par_mod(const Field3D& f_in, const Field3D& v_in,
 /// fv is not interpolated to cell boundaries.
 template <typename CellEdges>
 Field3D Div_par_fvv(const Field3D& f_in, const Field3D& v_in,
-                    const Field3D& wave_speed_in, bool fixflux) {
+                    const Field3D& wave_speed_in, bool fixflux, bool reconstruct) {
   ASSERT1_FIELDS_COMPATIBLE(f_in, v_in);
   const Mesh* mesh = f_in.getMesh();
   const Coordinates* coord = f_in.getCoordinates();
@@ -882,6 +969,71 @@ Field3D Div_par_fvv(const Field3D& f_in, const Field3D& v_in,
     const auto yboundary = coord->getYBoundary();
 
     Field3D result{emptyFrom(f_in)};
+
+    if (reconstruct) {
+      // The fluxes of the field-aligned branch below, with the neighbour's
+      // face values from parallel slices (see Div_par_mod)
+      Field3D f_low;
+      Field3D f_high;
+      Field3D v_low;
+      Field3D v_high;
+      cellEdgesFromSlices<CellEdges>(f_in, f_low, f_high);
+      cellEdgesFromSlices<CellEdges>(v_in, v_low, v_high);
+
+      const auto& f_low_up = f_low.yup();
+      const auto& f_high_down = f_high.ydown();
+      const auto& v_low_up = v_low.yup();
+      const auto& v_high_down = v_high.ydown();
+
+      BOUT_FOR(i, f_in.getRegion("RGN_NOBNDRY")) {
+        const auto iyp = i.yp();
+        const auto iym = i.ym();
+
+        BoutReal flux_up = BoutNaN;
+        if (yboundary.contains<+1>(i)) {
+          const BoutReal v_mid = 0.5 * (v_in[i] + v_up[iyp]);
+          const BoutReal n_mid = 0.5 * (f_in[i] + f_up[iyp]);
+          if (fixflux) {
+            flux_up = n_mid * v_mid * v_mid;
+          } else {
+            flux_up = (f_high[i] * v_high[i] * v_high[i])
+                      + (BOUTMAX(wave_speed_in[i], std::abs(v_in[i]), std::abs(v_up[iyp]))
+                         * n_mid * (v_high[i] - v_mid));
+          }
+        } else {
+          const BoutReal amax = BOUTMAX(wave_speed_in[i], wave_speed_up[iyp],
+                                        std::abs(v_in[i]), std::abs(v_up[iyp]));
+          flux_up = (f_high[i] * 0.5 * (v_high[i] + amax) * v_high[i])
+                    + (f_low_up[iyp] * 0.5 * (v_low_up[iyp] - amax) * v_low_up[iyp]);
+        }
+
+        BoutReal flux_down = BoutNaN;
+        if (yboundary.contains<-1>(i)) {
+          const BoutReal v_mid = 0.5 * (v_in[i] + v_down[iym]);
+          const BoutReal n_mid = 0.5 * (f_in[i] + f_down[iym]);
+          if (fixflux) {
+            flux_down = n_mid * v_mid * v_mid;
+          } else {
+            flux_down =
+                (f_low[i] * v_low[i] * v_low[i])
+                - (BOUTMAX(wave_speed_in[i], std::abs(v_in[i]), std::abs(v_down[iym]))
+                   * n_mid * (v_low[i] - v_mid));
+          }
+        } else {
+          const BoutReal amax = BOUTMAX(wave_speed_in[i], wave_speed_down[iym],
+                                        std::abs(v_in[i]), std::abs(v_down[iym]));
+          flux_down =
+              (f_low[i] * 0.5 * (v_low[i] - amax) * v_low[i])
+              + (f_high_down[iym] * 0.5 * (v_high_down[iym] + amax) * v_high_down[iym]);
+        }
+
+        result[i] = ((flux_up * coord->cell_area_yhigh()[i])
+                     - (flux_down * coord->cell_area_ylow()[i]))
+                    / coord->cell_volume()[i];
+      }
+      return result;
+    }
+
     BOUT_FOR(i, f_in.getRegion("RGN_NOBNDRY")) {
       const auto iyp = i.yp();
       const auto iym = i.ym();
