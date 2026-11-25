@@ -82,6 +82,18 @@ int main(int argc, char** argv) {
       }
     }
 
+    // Unstructured meshes do not exchange y guard cells: count the ones a
+    // communication changes
+    Field3D marked{1.0, mesh};
+    BOUT_FOR(i, marked.getRegion("RGN_YGUARDS")) { marked[i] = -1.0; }
+    mesh->communicate(marked);
+    int y_guards_exchanged = 0;
+    BOUT_FOR_SERIAL(i, marked.getRegion("RGN_YGUARDS")) {
+      y_guards_exchanged += (marked[i] != -1.0) ? 1 : 0;
+    }
+    MPI_Allreduce(MPI_IN_PLACE, &y_guards_exchanged, 1, MPI_INT, MPI_SUM,
+                  BoutComm::get());
+
     Field3D K{1.0, mesh};
     mesh->communicate(K);
     K.applyParallelBoundary("parallel_neumann_o1");
@@ -101,6 +113,7 @@ int main(int argc, char** argv) {
     dump["div_bndry_expr"] = par->Div_par_K_Grad_par(K, f_expr, true);
     MPI_Allreduce(MPI_IN_PLACE, &gridvar_mismatch, 1, MPI_INT, MPI_SUM, BoutComm::get());
     dump["gridvar_mismatch"] = gridvar_mismatch;
+    dump["y_guards_exchanged"] = y_guards_exchanged;
 
     // Variable coefficient, Neumann boundaries: with bndry_flux = false the
     // physical volume integral of the divergence vanishes

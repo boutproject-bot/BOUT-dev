@@ -17,6 +17,9 @@
 # Run on 1 rank and on 2 ranks (split in y, so that the walls are on
 # different ranks).
 #
+# communicate() does not exchange the y guard cells on unstructured meshes
+# (the parallel slices come from the stored maps): none may change.
+#
 # K2 divergence (Div_par_K_Grad_par_k2, conduction_method = PetscOperatorK2;
 # matrices k2_* written into the grid file by zoidberg):
 #
@@ -116,6 +119,11 @@ def check(path):
     checks["variable K: physical volume integral (bndry_flux = false)"] = abs(
         np.sum(dyV * div_v)
     ) / np.sum(np.abs(dyV * div_v))
+    # The parallel slices come from the stored maps, so communicate() leaves
+    # the y guard cells alone
+    checks["y guard cells exchanged (count)"] = float(
+        collect("y_guards_exchanged", path=path, info=False)
+    )
 
     failures = []
     for name, value in checks.items():
