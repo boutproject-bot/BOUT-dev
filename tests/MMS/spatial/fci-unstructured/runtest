@@ -215,7 +215,12 @@ def conservation(path: str = DIRECTORY) -> bool:
     ok = integral < 1e-12
     print(f"FV_div_a_grad_perp relative volume integral = {integral:.3e}", end="")
     print(f"\t............ {'PASS' if ok else 'FAIL'}")
-    return ok
+    # Closed planes: no wall nodes, so no flow into walls
+    wall_flow = quiet_collect("FV_div_a_grad_perp_wall_flow", path)
+    wall_ok = wall_flow == 0.0
+    print(f"FV_div_a_grad_perp flow into the walls = {wall_flow:.3e}", end="")
+    print(f"\t............ {'PASS' if wall_ok else 'FAIL'}")
+    return ok and wall_ok
 
 
 def run_fci_operators(nz: int, args: str) -> dict[str, dict[str, float]]:
@@ -358,6 +363,7 @@ CYL_OPERATORS = (
 
 def check_cylindrical() -> list[str]:
     errors = {operator: [] for operator in CYL_OPERATORS}
+    failures = []
     for n in CYL_NLIST:
         gridname = f"mesh_cyl.{n}.fci.nc"
         cmd = f"./fci_mms -d {CYL_DIRECTORY} NXPE=1 mesh:file={gridname}"
@@ -371,7 +377,18 @@ def check_cylindrical() -> list[str]:
             sys.exit(status)
         for operator in CYL_OPERATORS:
             errors[operator].append(quiet_collect(f"{operator}_l_2", CYL_DIRECTORY))
-    failures = []
+        # Dirichlet walls: the divergence and the flow into the walls
+        # integrate to zero together, and that flow is not small
+        integral = abs(quiet_collect("FV_div_a_grad_perp_wall_integral", CYL_DIRECTORY))
+        wall_flow = quiet_collect("FV_div_a_grad_perp_wall_flow", CYL_DIRECTORY)
+        ok = integral < 1e-12 and wall_flow > 1e-3
+        print(
+            f"FV_div_a_grad_perp cylindrical n={n}: with the flow into the walls "
+            f"{integral:.3e} (that flow {wall_flow:.3e})\t............ "
+            f"{'PASS' if ok else 'FAIL'}"
+        )
+        if not ok:
+            failures.append(f"FV_div_a_grad_perp wall balance cylindrical n={n}")
     spacing = 1.0 / array(CYL_NLIST)
     for operator in CYL_OPERATORS:
         name = f"{operator} cylindrical"

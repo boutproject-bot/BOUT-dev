@@ -211,6 +211,12 @@ public:
                              Field3D& flow_zlow, bool upwinding) const = 0;
   virtual Field3D operator()(const Field3D& a, const Field3D& f,
                              bool upwinding) const = 0;
+  /// As above, and in @p wall_outflow the flow from each cell into the walls
+  /// per unit volume. Only on unstructured meshes (see below); on structured
+  /// meshes the walls are the x boundaries, where flow_xlow gives the flows.
+  virtual Field3D operator()(const Field3D& a, const Field3D& f, Field3D& flow_xlow,
+                             Field3D& flow_zlow, Field3D& wall_outflow,
+                             bool upwinding) const;
 
   static std::shared_ptr<Div_a_Grad_perp_FCI> create(Mesh* mesh, BoutReal rho_s0);
 };
@@ -259,11 +265,21 @@ private:
 /// of the cell-averaged flux vector -a grad_perp f, in normalised units.
 /// Upwinding and flows need the optional grid arrays dagp_us_left/right and
 /// dagp_us_flowR/flowZ; without them upwinding throws and the flows are zero.
+///
+/// wall_outflow is the flow from each evolving cell into the Dirichlet wall
+/// nodes per unit volume, in normalised units: the part of the divergence
+/// from the faces between the cell and a wall node, with the sign reversed.
+/// Wall nodes have no divergence row, so these are the face points that
+/// appear in one row only. Zero with insulating walls, which have no such
+/// faces. The divergence and wall_outflow integrate to zero together.
 class Div_a_Grad_perp_FCI_unstructured : public Div_a_Grad_perp_FCI {
 public:
   Field3D operator()(const Field3D& a, const Field3D& f, Field3D& flow_xlow,
                      Field3D& flow_zlow, bool upwinding) const override;
   Field3D operator()(const Field3D& a, const Field3D& f, bool upwinding) const override;
+  Field3D operator()(const Field3D& a, const Field3D& f, Field3D& flow_xlow,
+                     Field3D& flow_zlow, Field3D& wall_outflow,
+                     bool upwinding) const override;
   Div_a_Grad_perp_FCI_unstructured(Mesh* mesh, BoutReal rho_s0);
   ~Div_a_Grad_perp_FCI_unstructured();
 
