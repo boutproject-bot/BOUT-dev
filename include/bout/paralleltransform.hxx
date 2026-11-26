@@ -346,7 +346,8 @@ class GlobalField3DAccess;
  *    index (without) of the neighbour; pmap_<dir>_x < 0 where there is none
  *    (only allowed in the x guard cells, whose slices copy the cell);
  *  - pmap_<dir>_dzeta: toroidal angle by which the field line advances from
- *    the cell to that neighbour.
+ *    the cell to that neighbour; across a branch cut this includes the
+ *    twist-shift angle, so no ShiftAngle is needed.
  *
  * As with FCI, the parallel slices are the only parallel connection, so
  * fields cannot be transformed to field-aligned form, and with 3D metrics

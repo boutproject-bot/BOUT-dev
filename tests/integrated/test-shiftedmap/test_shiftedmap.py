@@ -5,13 +5,13 @@
 # the toroidal shift to it is applied with FFTs in z.
 #
 # A sheared slab with closed field lines (4 x 8 cells, nz = 16, zShift
-# varying in x and y) is run with ShiftedMetric, and the same cells are
-# stored in a shuffled order along x (y of size 1) with the map and run
-# with ShiftedMetricMap, on one and on two processors. For every cell the
-# forward and backward parallel slices and Grad_par must agree to round-off,
-# and the slices must match the field evaluated at the shifted points; the
-# shift is not negligible (the slices differ from the unshifted neighbour
-# values by order one).
+# varying in x and y, with a twist-shift at the branch cut) is run with
+# ShiftedMetric, and the same cells are stored in a shuffled order along x
+# (y of size 1) with the map and run with ShiftedMetricMap, on one and on
+# two processors. For every cell the forward and backward parallel slices
+# and Grad_par must agree to round-off, and the slices must match the field
+# evaluated at the shifted points. The shift, and the twist at the cut,
+# each change the slices by order one.
 
 import pathlib
 import shutil
@@ -31,32 +31,38 @@ def field(x, y, z):
     return np.sin(2 * z + 0.9 * y + x) + 0.4 * np.cos(5 * z - 2 * y + 0.3 * x)
 
 
+def q(x):
+    """Toroidal turns of a field line per poloidal turn"""
+    return 0.3 + 0.1 * x
+
+
 def zshift(x, y):
-    """Sheared: the shift depends on x and on y"""
-    return 0.7 * (x + 1) * np.sin(y)
+    """Sheared, and not periodic: it grows by 2 pi q(x) per poloidal turn"""
+    return q(x) * y + 0.7 * (x + 1) * np.sin(y)
 
 
-X, Y = np.meshgrid(np.arange(NX), np.arange(NY) * DY, indexing="ij")
+# Cell indices; along a field line y continues past the branch cut
+X, J = np.meshgrid(np.arange(NX), np.arange(NY), indexing="ij")
 Z = np.arange(NZ) * 2 * np.pi / NZ
-F = field(X[..., None], Y[..., None], Z[None, None, :])
+F = field(X[..., None], J[..., None] * DY, Z)
 
 
-def write(name, nx, ny, values):
+def write(name, nx, ny, values, shift_angle):
     with Dataset(name, "w") as d:
         d.createDimension("x", nx)
         d.createDimension("y", ny)
         d.createDimension("z", NZ)
         for var, value in (("nx", nx), ("ny", ny), ("nz", NZ)):
             d.createVariable(var, "i4")[...] = value
-        # Closed field lines: zShift is periodic in y, so no twist at the cut
-        d.createVariable("ShiftAngle", "f8", ("x",))[...] = np.zeros(nx)
+        d.createVariable("ShiftAngle", "f8", ("x",))[...] = shift_angle
         for var, value in values.items():
             dims = ("x", "y", "z")[: np.ndim(value)]
             d.createVariable(var, "f8", dims)[...] = value
 
 
 def make_grids():
-    # Structured: cell (x, y), neighbour (x, y +- 1)
+    # Structured: cell (x, y), neighbour (x, y +- 1); zShift jumps by
+    # ShiftAngle at the branch cut
     write(
         "structured.nc",
         NX,
@@ -67,9 +73,10 @@ def make_grids():
             # Uniform spacing (else BOUT++ differentiates dx, which needs x guards)
             "d2x": np.zeros((NX, NY, NZ)),
             "d2y": np.zeros((NX, NY, NZ)),
-            "zShift": zshift(X, Y),
+            "zShift": zshift(X, J * DY),
             "f_test": F,
         },
+        2 * np.pi * q(np.arange(NX)),
     )
     # The same cells, shuffled along x with y of size 1
     rng = np.random.default_rng(3)
@@ -90,14 +97,14 @@ def make_grids():
             values[f"forward_{var}"] = values[var]
             values[f"backward_{var}"] = values[var]
     for name, step in (("forward", 1), ("backward", -1)):
-        yn = (ys + step) % NY
-        values[f"pmap_{name}_x"] = position[xs * NY + yn][:, None].astype(float)
+        values[f"pmap_{name}_x"] = position[xs * NY + (ys + step) % NY][:, None]
         values[f"pmap_{name}_y"] = np.zeros((NX * NY, 1))
-        # Toroidal angle by which the field line advances to the neighbour
-        values[f"pmap_{name}_dzeta"] = (zshift(xs, yn * DY) - zshift(xs, ys * DY))[
-            :, None
-        ]
-    write("mapped.nc", NX * NY, 1, values)
+        # Toroidal angle by which the field line advances to the neighbour,
+        # along the line: across the branch cut it includes the twist-shift
+        dzeta = zshift(xs, (ys + step) * DY) - zshift(xs, ys * DY)
+        values[f"pmap_{name}_dzeta"] = dzeta[:, None]
+    # No branch cut in y here: the twist is part of the map
+    write("mapped.nc", NX * NY, 1, values, np.zeros(NX * NY))
     return xs, ys
 
 
@@ -116,6 +123,12 @@ def run(name, nproc, args):
     }
 
 
+def slice_at(step, dzeta):
+    """The field in the cell at y + step, at z + dzeta"""
+    yn = ((J + step) % NY) * DY
+    return field(X[..., None], yn[..., None], Z + dzeta[..., None])
+
+
 def test_shiftedmap():
     xs, ys = make_grids()
     build_and_log("ShiftedMetricMap")
@@ -124,10 +137,7 @@ def test_shiftedmap():
     # Expected slices: the field at the neighbour, at the z the field line reaches
     expected = {}
     for var, step in (("f_up", 1), ("f_down", -1)):
-        yn = (Y + step * DY) % (2 * np.pi)
-        shift = zshift(X, yn) - zshift(X, Y)
-        expected[var] = field(X[..., None], yn[..., None], Z + shift[..., None])
-    unshifted = field(X[..., None], (Y + DY)[..., None], Z)
+        expected[var] = slice_at(step, zshift(X, (J + step) * DY) - zshift(X, J * DY))
 
     failures = []
     for var in ("f_up", "f_down"):
@@ -136,9 +146,14 @@ def test_shiftedmap():
             failures.append(
                 f"ShiftedMetric {var} differs from the field by {error:.2e}"
             )
-    size = np.max(np.abs(expected["f_up"] - unshifted))
-    if size < 0.1:
-        failures.append(f"the shift is too small to test ({size:.2e})")
+    # Neither the shift nor the twist at the cut is small
+    unshifted = slice_at(1, np.zeros((NX, NY)))
+    untwisted = slice_at(1, zshift(X, ((J + 1) % NY) * DY) - zshift(X, J * DY))
+    for name, other in (("shift", unshifted), ("twist", untwisted)):
+        size = np.max(np.abs(expected["f_up"] - other))
+        print(f"the {name} changes the slices by up to {size:.2f}")
+        if size < 0.1:
+            failures.append(f"the {name} is too small to test ({size:.2e})")
 
     for nproc, args in ((1, "NXPE=1"), (2, "NXPE=2")):
         mapped = run(

@@ -203,7 +203,9 @@ For ``forward`` and ``backward``, the grid file contains 2D variables
 guard cells, and the Y index of the neighbour; a negative X index only
 in X guard cells, which have no neighbour) and ``pmap_forward_dzeta``,
 the toroidal angle by which the field line advances from the cell to
-the neighbour. The `ShiftedMetricMap` class then calculates the
+the neighbour. Where the field line crosses a branch cut this angle
+includes the twist-shift, so ``ShiftAngle`` is not used. The
+`ShiftedMetricMap` class then calculates the
 parallel slices by shifting the neighbour's values in Z with FFTs, as
 the shifted metric method does for the neighbour at Y+1. On a mesh
 stored in field-line order the two methods give the same slices.
