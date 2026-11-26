@@ -6,12 +6,16 @@
 #ifndef BOUT_PARALLELTRANSFORM_H
 #define BOUT_PARALLELTRANSFORM_H
 
+#include "bout/assert.hxx"
 #include "bout/bout_types.hxx"
 #include "bout/dcomplex.hxx"
 #include "bout/field3d.hxx"
 #include "bout/field_data.hxx"
 #include "bout/options.hxx"
 #include "bout/unused.hxx"
+
+#include <memory>
+#include <vector>
 
 class Mesh;
 
@@ -325,6 +329,85 @@ private:
   /// @return The shifted parallel slices
   std::vector<Field3D> shiftZ(const Field3D& f,
                               const std::vector<ParallelSlicePhase>& phases) const;
+};
+
+class GlobalField3DAccess;
+
+/*!
+ * Shifted metric for meshes whose cells are not stored in field-line order
+ * along y, e.g. unstructured meshes in x and y with a structured z
+ * (`type = shiftedmap`). The neighbour of each cell along the magnetic
+ * field is given by a map in the grid file, and the toroidal shift to it is
+ * applied with FFTs in z, as ShiftedMetric does for the neighbour at y +- 1.
+ * The map depends only on x and y, so the grid data do not grow with nz.
+ *
+ * Grid variables (2D), for `forward` and `backward`:
+ *  - pmap_<dir>_x, pmap_<dir>_y: global x index (with guard cells) and y
+ *    index (without) of the neighbour; pmap_<dir>_x < 0 where there is none
+ *    (only allowed in the x guard cells, whose slices copy the cell);
+ *  - pmap_<dir>_dzeta: toroidal angle by which the field line advances from
+ *    the cell to that neighbour.
+ *
+ * As with FCI, the parallel slices are the only parallel connection, so
+ * fields cannot be transformed to field-aligned form, and with 3D metrics
+ * the metric at the neighbours is read from the grid file (forward_g_22
+ * etc., which may be 2D). One y guard cell (MYG = 1).
+ */
+class ShiftedMetricMap : public ParallelTransform {
+public:
+  ShiftedMetricMap(Mesh& mesh, BoutReal zlength, Options* opt = nullptr);
+  ~ShiftedMetricMap() override;
+
+  /// Neighbour columns along the field, shifted in z with FFTs
+  void calcParallelSlices(Field3D& f) override;
+
+  using ParallelTransform::fromFieldAligned;
+  using ParallelTransform::toFieldAligned;
+  Field3D toFieldAligned(const Field3D& UNUSED(f),
+                         const std::string& UNUSED(region) = "RGN_ALL") override {
+    throw BoutException("shiftedmap cannot transform into field aligned grid");
+  }
+  FieldPerp toFieldAligned(const FieldPerp& UNUSED(f),
+                           const std::string& UNUSED(region) = "RGN_ALL") override {
+    throw BoutException("shiftedmap cannot transform into field aligned grid");
+  }
+  Field3D fromFieldAligned(const Field3D& UNUSED(f),
+                           const std::string& UNUSED(region) = "RGN_ALL") override {
+    throw BoutException("shiftedmap cannot transform from field aligned grid");
+  }
+  FieldPerp fromFieldAligned(const FieldPerp& UNUSED(f),
+                             const std::string& UNUSED(region) = "RGN_ALL") override {
+    throw BoutException("shiftedmap cannot transform from field aligned grid");
+  }
+
+  bool canToFromFieldAligned() const override { return false; }
+
+  bool requiresTwistShift(bool UNUSED(twist_shift_enabled),
+                          [[maybe_unused]] YDirectionType ytype) override {
+    // No Field3Ds require twist-shift, because they cannot be field-aligned
+    ASSERT1(ytype == YDirectionType::Standard);
+    return false;
+  }
+
+protected:
+  void checkInputGrid() override;
+
+private:
+  /// Length of the z-domain in radians
+  BoutReal zlength;
+
+  /// One direction along the field
+  struct Slice {
+    int y_offset;
+    /// Global index of each cell's neighbour at z = 0, -1 if none
+    Matrix<int> source;
+    /// Phase factor of each Fourier mode for each cell
+    Tensor<dcomplex> phase;
+  };
+  std::vector<Slice> slices;
+
+  /// Fetches the neighbours' columns from other processors
+  std::unique_ptr<GlobalField3DAccess> gather;
 };
 
 #endif // BOUT_PARALLELTRANSFORM_H

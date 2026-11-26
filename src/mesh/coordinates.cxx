@@ -922,6 +922,15 @@ void Coordinates::setParallelTransform(Options* options) {
           *localmesh, location, zShift, getUniform(zlength()));
     }
 
+  } else if (ptstr == "shiftedmap") {
+    // Shifted metric with the neighbour along the field from a map, e.g. for
+    // meshes unstructured in x and y with a structured z
+    if (location != CELL_CENTRE) {
+      throw BoutException("ShiftedMetricMap is not available on staggered grids.");
+    }
+    transform = bout::utils::make_unique<ShiftedMetricMap>(
+        *localmesh, getUniform(zlength()), ptoptions);
+
   } else if (ptstr == "fci") {
 
     if (location != CELL_CENTRE) {
@@ -933,9 +942,10 @@ void Coordinates::setParallelTransform(Options* options) {
     transform = bout::utils::make_unique<FCITransform>(*localmesh, dy(), fci_zperiodic,
                                                        ptoptions);
   } else {
-    throw BoutException(_f("Unrecognised paralleltransform option '{}'.\n"
-                           "Valid choices are 'identity', 'shifted', 'fci'"),
-                        ptstr);
+    throw BoutException(
+        _f("Unrecognised paralleltransform option '{}'.\n"
+           "Valid choices are 'identity', 'shifted', 'shiftedmap', 'fci'"),
+        ptstr);
   }
 }
 

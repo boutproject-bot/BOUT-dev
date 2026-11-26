@@ -1,0 +1,11 @@
+# Grids written by test_shiftedmap.py; the grid file and the parallel
+# transform are set on the command line
+
+MXG = 0
+MYG = 1
+
+[mesh]
+file = "structured.nc"
+
+[mesh:paralleltransform]
+type = shifted

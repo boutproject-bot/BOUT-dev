@@ -183,6 +183,36 @@ something like::
 Special handling is needed for parallel boundary conditions, see
 :ref:`sec-parallel-bc-aligned-transform`.
 
+.. _sec-shifted-metric-map:
+
+Shifted metric with a map
+-------------------------
+
+For meshes whose cells are not stored in field-line order along Y, for
+example meshes that are unstructured in X and Y but structured in Z,
+the neighbour of each cell along the magnetic field can be given by a
+map in the grid file instead:
+
+.. code-block:: cfg
+
+   [mesh:paralleltransform]
+   type = shiftedmap
+
+For ``forward`` and ``backward``, the grid file contains 2D variables
+``pmap_forward_x`` and ``pmap_forward_y`` (the global X index, counting
+guard cells, and the Y index of the neighbour; a negative X index only
+in X guard cells, which have no neighbour) and ``pmap_forward_dzeta``,
+the toroidal angle by which the field line advances from the cell to
+the neighbour. The `ShiftedMetricMap` class then calculates the
+parallel slices by shifting the neighbour's values in Z with FFTs, as
+the shifted metric method does for the neighbour at Y+1. On a mesh
+stored in field-line order the two methods give the same slices.
+
+As with the FCI method, fields cannot be transformed to a field-aligned
+grid, ``MYG = 1``, and with 3D metrics the metric at the neighbours is
+read from the grid file (``forward_g_22`` etc.; these may be 2D). Parallel
+boundaries are not supported yet.
+
 .. _sec-fci:
 
 FCI method
