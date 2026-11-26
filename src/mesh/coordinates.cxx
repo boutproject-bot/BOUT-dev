@@ -1180,8 +1180,13 @@ void Coordinates::_compute_cell_area_y() const {
           jxz_ylow[i] = By_c[i] / By_l[i] * jxz_centre[i];
           jxz_yhigh[i] = By_c[i] / By_h[i] * jxz_centre[i];
         }
-        ASSERT3(isUniform(dx_, true, "RGN_ALL"));
-        ASSERT2(isUniform(dx_, false, "RGN_ALL"));
+        // The area of a face is taken from the cell on one side, so dx must
+        // be the same on both sides: on FCI meshes through uniform spacing,
+        // while ShiftedMetricMap checks it face by face
+        if (dynamic_cast<const FCITransform*>(transform.get()) != nullptr) {
+          ASSERT3(isUniform(dx_, true, "RGN_ALL"));
+          ASSERT2(isUniform(dx_, false, "RGN_ALL"));
+        }
         ASSERT3(isUniform(dz_, true, "RGN_ALL"));
         ASSERT2(isUniform(dz_, false, "RGN_ALL"));
         _cell_area_ylow.emplace(jxz_ylow * dx_ * dz_);

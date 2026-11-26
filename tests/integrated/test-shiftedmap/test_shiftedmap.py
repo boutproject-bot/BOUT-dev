@@ -33,7 +33,7 @@ import shutil
 
 import numpy as np
 from boutdata.collect import collect
-from boututils.run_wrapper import build_and_log, launch_safe
+from boututils.run_wrapper import build_and_log, launch, launch_safe
 from netCDF4 import Dataset
 
 NX, NY, NZ = 4, 8, 16
@@ -250,6 +250,23 @@ def test_shiftedmap():
                 if error > TOLERANCE:
                     failures.append(f"{label}: {var} differs by {error:.2e}")
             check_points(label, mapped, points)
+
+    # The area of a y face is taken from the cell on one side, so a cell
+    # whose dx differs from its neighbours' must be refused
+    shutil.copy("mapped.nc", "mapped_bad_dx.nc")
+    with Dataset("mapped_bad_dx.nc", "a") as d:
+        d["dx"][0, 0] = 1.5 * d["dx"][0, 0]
+    path = pathlib.Path("mapped_bad_dx")
+    path.mkdir(exist_ok=True)
+    shutil.copy("data/BOUT.inp", path)
+    status, out = launch(
+        f"./test_shiftedmap -d {path} mesh:file=mapped_bad_dx.nc "
+        "mesh:paralleltransform:type=shiftedmap",
+        nproc=1,
+        pipe=True,
+    )
+    if status == 0 or "the y faces need the same dx" not in out:
+        failures.append("a dx that differs between neighbours was not refused")
     assert not failures, failures
 
 

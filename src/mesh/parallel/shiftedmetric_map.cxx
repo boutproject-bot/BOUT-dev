@@ -119,6 +119,30 @@ ShiftedMetricMap::ShiftedMetricMap(Mesh& m, BoutReal zlength_in, Options* opt)
       }
     }
   }
+
+  // On meshes like this one BOUT++ takes the area of a y face from the cell
+  // on one side (Coordinates::_compute_cell_area_y), so a cell and its
+  // neighbours along the field must have the same dx (as on a field-aligned
+  // mesh, where dx depends on the flux surface only)
+  Field3D dx{&mesh};
+  mesh.get(dx, "dx", 1.0, false);
+  const auto dx_columns = gather->communicate(dx);
+  for (const auto& slice : slices) {
+    BOUT_FOR_SERIAL(i, mesh.getRegion2D("RGN_NOBNDRY")) {
+      const int source = slice.source(i.x(), i.y());
+      if (source < 0) {
+        continue;
+      }
+      const BoutReal here = dx(i.x(), i.y(), 0);
+      const BoutReal there = dx_columns[IndG3D(source)];
+      if (std::abs(there - here) > 1e-12 * std::abs(here)) {
+        throw BoutException("shiftedmap: dx is {:e} in cell ({:d}, {:d}) but {:e} in its "
+                            "neighbour along the field (y offset {:d}); the y faces "
+                            "need the same dx on both sides",
+                            here, i.x(), i.y(), there, slice.y_offset);
+      }
+    }
+  }
 }
 
 ShiftedMetricMap::~ShiftedMetricMap() = default;

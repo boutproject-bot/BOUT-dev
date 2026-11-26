@@ -220,7 +220,12 @@ with ``nx``.
 
 As with the FCI method, fields cannot be transformed to a field-aligned
 grid, ``MYG = 1``, and with 3D metrics the metric at the neighbours is
-read from the grid file (``forward_g_22`` etc.; these may be 2D).
+read from the grid file (``forward_g_22`` etc.; these may be 2D), as are
+the Y faces (``g_22_cell_ylow``, ``By``, ``By_cell_ylow`` etc.). The area
+of a Y face is taken from the cell on one side, so a cell and its
+neighbours along the field must have the same ``dx``, as on a
+field-aligned mesh; this is checked when the transform is created.
+``zoidberg.shiftedmap`` writes such grids from structured tokamak grids.
 
 If the cells are those of an unstructured poloidal mesh
 (:ref:`sec-fci-unstructured`) and ``nz > 1``, the stored perpendicular
