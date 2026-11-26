@@ -899,25 +899,24 @@ int meshGetInt(Mesh* mesh, const std::string& name) {
   return result;
 }
 
-/// Pack the evolving cells of a field into an existing cell-space vector
-void packCellsInto(const PetscCellMappingPtr& mapping, const Field3D& f,
+/// Pack the cells of z plane @p z of a field into an existing cell-space
+/// vector (the cell mapping numbers the cells of plane 0)
+void packCellsInto(const PetscCellMappingPtr& mapping, const Field3D& f, int z,
                    PetscCellVector& out) {
   BOUT_DO_PETSC(VecSet(out.raw(), 0.0));
   PetscScalar* x{nullptr};
   BOUT_DO_PETSC(VecGetArray(out.raw(), &x));
-  mapping->mapLocalField([&](PetscInt row, const Ind3D& i) { x[row] = f[i]; });
+  mapping->mapLocalField([&](PetscInt row, const Ind3D& i) { x[row] = f[i.zp(z)]; });
   BOUT_DO_PETSC(VecRestoreArray(out.raw(), &x));
 }
 
-/// Unpack a cell-space vector into a field without parallel slices
-Field3D unpackCells(const PetscCellVector& vec, const Field3D& prototype) {
+/// Unpack a cell-space vector into z plane @p z of a field
+void unpackCellsInto(const PetscCellVector& vec, int z, Field3D& result) {
   const auto mapping = std::static_pointer_cast<const PetscCellMapping>(vec.getMapping());
-  Field3D result{zeroFrom(prototype)};
   const PetscScalar* x{nullptr};
   BOUT_DO_PETSC(VecGetArrayRead(vec.raw(), &x));
-  mapping->mapLocalField([&](PetscInt row, const Ind3D& i) { result[i] = x[row]; });
+  mapping->mapLocalField([&](PetscInt row, const Ind3D& i) { result[i.zp(z)] = x[row]; });
   BOUT_DO_PETSC(VecRestoreArrayRead(vec.raw(), &x));
-  return result;
 }
 } // namespace
 #else
@@ -1058,72 +1057,81 @@ Field3D Div_a_Grad_perp_FCI_unstructured::Impl::apply(const Field3D& a, const Fi
                       PetscFacePointVector(faces)});
   }
   auto& w = *work;
-  packCellsInto(cells, a, w.a_cells);
-  packCellsInto(cells, f, w.f_cells);
-  const auto& a_cells = w.a_cells;
-  const auto& grad_face = w.grad_face;
-  grad.apply(w.f_cells, w.grad_face);
-
-  auto& a_face = w.a_face;
-  if (upwinding) {
-    if (not(left and right)) {
-      throw BoutException("Upwinding on unstructured meshes needs dagp_us_left/right "
-                          "in the grid file (regenerate with zoidberg.unstructured)");
-    }
-    // As in the structured operator, take a from the side with the larger f
-    // (where the diffusive flux comes from). The face gradient S.grad f is
-    // positive if f increases towards the right node. The value is the
-    // reconstruction from the upwind side stored in the grid file
-    // (dagp_us_left/right).
-    left->apply(a_cells, a_face);
-    right->apply(a_cells, w.a_right);
-    const auto& a_right = w.a_right;
-    PetscScalar* av{nullptr};
-    const PetscScalar* ar{nullptr};
-    const PetscScalar* gf{nullptr};
-    BOUT_DO_PETSC(VecGetArray(a_face.raw(), &av));
-    BOUT_DO_PETSC(VecGetArrayRead(a_right.raw(), &ar));
-    BOUT_DO_PETSC(VecGetArrayRead(grad_face.raw(), &gf));
-    PetscInt n_local{0};
-    BOUT_DO_PETSC(VecGetLocalSize(a_face.raw(), &n_local));
-    for (PetscInt i = 0; i < n_local; ++i) {
-      if (gf[i] > 0) {
-        av[i] = ar[i];
-      }
-    }
-    BOUT_DO_PETSC(VecRestoreArray(a_face.raw(), &av));
-    BOUT_DO_PETSC(VecRestoreArrayRead(a_right.raw(), &ar));
-    BOUT_DO_PETSC(VecRestoreArrayRead(grad_face.raw(), &gf));
-  } else {
-    value.apply(a_cells, a_face);
+  if (upwinding and not(left and right)) {
+    throw BoutException("Upwinding on unstructured meshes needs dagp_us_left/right "
+                        "in the grid file (regenerate with zoidberg.unstructured)");
   }
-  auto& flux = w.flux;
-  BOUT_DO_PETSC(VecPointwiseMult(flux.raw(), a_face.raw(), grad_face.raw()));
+  Field3D result{zeroFrom(f)};
+  if (flow_R != nullptr) {
+    *flow_R = zeroFrom(f);
+    *flow_Z = zeroFrom(f);
+  }
+  if (wall_out != nullptr) {
+    *wall_out = zeroFrom(f);
+  }
+
+  // The operators act within a plane of cells; with a structured z (nz > 1)
+  // they act on each z plane in turn
+  for (int z = 0; z < f.getMesh()->LocalNz; ++z) {
+    packCellsInto(cells, a, z, w.a_cells);
+    packCellsInto(cells, f, z, w.f_cells);
+    const auto& a_cells = w.a_cells;
+    const auto& grad_face = w.grad_face;
+    grad.apply(w.f_cells, w.grad_face);
+
+    auto& a_face = w.a_face;
+    if (upwinding) {
+      // As in the structured operator, take a from the side with the larger f
+      // (where the diffusive flux comes from). The face gradient S.grad f is
+      // positive if f increases towards the right node. The value is the
+      // reconstruction from the upwind side stored in the grid file
+      // (dagp_us_left/right).
+      left->apply(a_cells, a_face);
+      right->apply(a_cells, w.a_right);
+      const auto& a_right = w.a_right;
+      PetscScalar* av{nullptr};
+      const PetscScalar* ar{nullptr};
+      const PetscScalar* gf{nullptr};
+      BOUT_DO_PETSC(VecGetArray(a_face.raw(), &av));
+      BOUT_DO_PETSC(VecGetArrayRead(a_right.raw(), &ar));
+      BOUT_DO_PETSC(VecGetArrayRead(grad_face.raw(), &gf));
+      PetscInt n_local{0};
+      BOUT_DO_PETSC(VecGetLocalSize(a_face.raw(), &n_local));
+      for (PetscInt i = 0; i < n_local; ++i) {
+        if (gf[i] > 0) {
+          av[i] = ar[i];
+        }
+      }
+      BOUT_DO_PETSC(VecRestoreArray(a_face.raw(), &av));
+      BOUT_DO_PETSC(VecRestoreArrayRead(a_right.raw(), &ar));
+      BOUT_DO_PETSC(VecRestoreArrayRead(grad_face.raw(), &gf));
+    } else {
+      value.apply(a_cells, a_face);
+    }
+    auto& flux = w.flux;
+    BOUT_DO_PETSC(VecPointwiseMult(flux.raw(), a_face.raw(), grad_face.raw()));
+
+    if (flow_R != nullptr and flowR and flowZ) {
+      flowR->apply(flux, w.cells_out);
+      unpackCellsInto(w.cells_out, z, *flow_R);
+      flowZ->apply(flux, w.cells_out);
+      unpackCellsInto(w.cells_out, z, *flow_Z);
+    }
+    if (wall_out != nullptr and wall) {
+      wall->apply(flux, w.cells_out);
+      unpackCellsInto(w.cells_out, z, *wall_out);
+    }
+    div.apply(flux, w.cells_out);
+    unpackCellsInto(w.cells_out, z, result);
+  }
 
   if (flow_R != nullptr) {
-    if (flowR and flowZ) {
-      flowR->apply(flux, w.cells_out);
-      *flow_R = unpackCells(w.cells_out, f);
-      flowZ->apply(flux, w.cells_out);
-      *flow_Z = unpackCells(w.cells_out, f);
-    } else {
-      *flow_R = zeroFrom(f);
-      *flow_Z = zeroFrom(f);
-    }
     flow_R->setRegion("RGN_NOBNDRY");
     flow_Z->setRegion("RGN_NOBNDRY");
   }
   if (wall_out != nullptr) {
-    if (wall) {
-      wall->apply(flux, w.cells_out);
-      *wall_out = unpackCells(w.cells_out, f);
-    } else {
-      *wall_out = zeroFrom(f);
-    }
     wall_out->setRegion("RGN_NOBNDRY");
   }
-  div.apply(flux, w.cells_out);
-  auto result = unpackCells(w.cells_out, f);
   result.setRegion("RGN_NOBNDRY");
   return result;
 }

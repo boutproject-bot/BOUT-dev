@@ -123,6 +123,11 @@ PetscErrorCode createUnstructuredPattern(Mat& jacobian, Mesh* mesh, Options& opt
                         "Field3D variables, but there are {:d} Field2D variables",
                         n2d);
   }
+  if (mesh->LocalNz != 1) {
+    throw BoutException("Jacobian colouring on unstructured meshes needs nz = 1 (the "
+                        "stored couplings are those of one z plane), not {:d}",
+                        mesh->LocalNz);
+  }
   const int parallel_hops =
       options["stencil:parallel_hops"]
           .doc("Unstructured meshes: steps along the magnetic field over which the "

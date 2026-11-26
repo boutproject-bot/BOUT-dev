@@ -97,6 +97,12 @@ FCIMap::FCIMap(Mesh& mesh, [[maybe_unused]] const Coordinates::FieldMetric& dy,
     if (std::abs(offset_) != 1) {
       throw BoutException("Unstructured meshes only support MYG = 1");
     }
+    if (map_mesh->LocalNz != 1) {
+      throw BoutException("FCI on unstructured meshes needs nz = 1, not {:d} (the maps "
+                          "connect the cells of one z plane); for a structured z use "
+                          "paralleltransform type shiftedmap",
+                          map_mesh->LocalNz);
+    }
   }
   interp = XZInterpolationFactory::getInstance().create(&interpolation_options, map_mesh);
   interp->setYOffset(offset_);

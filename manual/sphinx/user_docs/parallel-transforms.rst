@@ -222,6 +222,13 @@ As with the FCI method, fields cannot be transformed to a field-aligned
 grid, ``MYG = 1``, and with 3D metrics the metric at the neighbours is
 read from the grid file (``forward_g_22`` etc.; these may be 2D).
 
+If the cells are those of an unstructured poloidal mesh
+(:ref:`sec-fci-unstructured`) and ``nz > 1``, the stored perpendicular
+operator (``FV::Div_a_Grad_perp_FCI``) acts on each Z plane in turn: the
+cell numbers and matrices in the grid file describe one plane and do
+not grow with ``nz``. FCI itself needs ``nz = 1`` on unstructured
+meshes.
+
 .. _sec-fci:
 
 FCI method

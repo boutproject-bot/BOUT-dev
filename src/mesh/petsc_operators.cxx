@@ -213,6 +213,24 @@ Field3D PetscOperators::meshGetField3D(Mesh* mesh, const std::string& name) {
   return result;
 }
 
+namespace {
+/// On unstructured meshes the stored cell numbers count the cells of one z
+/// plane: with nz > 1 the cell-space operators act on each plane in turn,
+/// so only plane 0 is numbered. (On structured FCI meshes the numbers count
+/// every cell, z included.)
+Field3D firstPlane(Field3D numbers) {
+  Mesh* mesh = numbers.getMesh();
+  if (mesh->isUnstructured() and mesh->LocalNz > 1) {
+    BOUT_FOR_SERIAL(i, numbers.getRegion("RGN_ALL")) {
+      if (i.z() > 0) {
+        numbers[i] = -1;
+      }
+    }
+  }
+  return numbers;
+}
+} // namespace
+
 int PetscOperators::meshGetInt(const std::string& name) const {
   int result{0};
   if (mesh->get(result, name) != 0) {
@@ -222,11 +240,11 @@ int PetscOperators::meshGetInt(const std::string& name) const {
 }
 
 PetscOperators::PetscOperators(Mesh* mesh)
-    : mesh(mesh),
-      cell_mapping(std::make_shared<PetscCellMapping>(
-          meshGetField3D(mesh, "cell_number"),
-          meshGetField3D(mesh, "forward_cell_number"),
-          meshGetField3D(mesh, "backward_cell_number"), meshGetInt("total_cells"))),
+    : mesh(mesh), cell_mapping(std::make_shared<PetscCellMapping>(
+                      firstPlane(meshGetField3D(mesh, "cell_number")),
+                      firstPlane(meshGetField3D(mesh, "forward_cell_number")),
+                      firstPlane(meshGetField3D(mesh, "backward_cell_number")),
+                      meshGetInt("total_cells"))),
       forward_leg_interior_number(meshGetField3D(mesh, "forward_leg_interior_number")),
       forward_leg_boundary_number(meshGetField3D(mesh, "forward_leg_boundary_number")),
       backward_leg_interior_number(meshGetField3D(mesh, "backward_leg_interior_number")),

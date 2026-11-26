@@ -1,0 +1,9 @@
+# One plane of unstructured cells (grid made by the test), with nz = 1 or a
+# structured z; the grid file is set on the command line
+
+[mesh]
+file = "plane_nz1.nc"
+extrapolate_y = false
+
+[mesh:paralleltransform]
+type = identity
