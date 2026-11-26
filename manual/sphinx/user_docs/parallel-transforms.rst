@@ -200,8 +200,7 @@ map in the grid file instead:
 
 For ``forward`` and ``backward``, the grid file contains 2D variables
 ``pmap_forward_x`` and ``pmap_forward_y`` (the global X index, counting
-guard cells, and the Y index of the neighbour; a negative X index only
-in X guard cells, which have no neighbour) and ``pmap_forward_dzeta``,
+guard cells, and the Y index of the neighbour) and ``pmap_forward_dzeta``,
 the toroidal angle by which the field line advances from the cell to
 the neighbour. Where the field line crosses a branch cut this angle
 includes the twist-shift, so ``ShiftAngle`` is not used. The
@@ -210,10 +209,18 @@ parallel slices by shifting the neighbour's values in Z with FFTs, as
 the shifted metric method does for the neighbour at Y+1. On a mesh
 stored in field-line order the two methods give the same slices.
 
+Where a field line ends on a target, ``pmap_forward_x`` is below the
+interior (``-1``) or beyond it (``nx``), as ``forward_xt_prime`` on FCI
+grids. The cell then gets a point half a cell away in the inner or
+outer parallel boundary region, and parallel boundary conditions
+(:ref:`sec-parallel-bc-fci`) set its slice there; until then the slice
+holds the cell's own values. As on FCI meshes, the default Y boundary
+iterator visits only the outer regions, so targets are normally marked
+with ``nx``.
+
 As with the FCI method, fields cannot be transformed to a field-aligned
 grid, ``MYG = 1``, and with 3D metrics the metric at the neighbours is
-read from the grid file (``forward_g_22`` etc.; these may be 2D). Parallel
-boundaries are not supported yet.
+read from the grid file (``forward_g_22`` etc.; these may be 2D).
 
 .. _sec-fci:
 

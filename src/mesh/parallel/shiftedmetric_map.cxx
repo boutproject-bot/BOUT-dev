@@ -7,6 +7,7 @@
 #include "fci_comm.hxx"
 
 #include "bout/paralleltransform.hxx"
+#include <bout/boundary_region_iter.hxx>
 #include <bout/boutexception.hxx>
 #include <bout/constants.hxx>
 #include <bout/fft.hxx>
@@ -15,9 +16,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+using bout::boundary::BoundaryRegionFCI;
 
 ShiftedMetricMap::ShiftedMetricMap(Mesh& m, BoutReal zlength_in, Options* opt)
     : ParallelTransform(m, opt), zlength(zlength_in),
@@ -30,6 +34,11 @@ ShiftedMetricMap::ShiftedMetricMap(Mesh& m, BoutReal zlength_in, Options* opt)
   }
 
   const int nmodes = mesh.LocalNz / 2 + 1;
+  // Global x indices of the cells that can be neighbours
+  const int interior_begin = mesh.xstart;
+  const int interior_end = mesh.GlobalNx - mesh.xstart;
+  std::vector<std::shared_ptr<BoundaryRegionFCI>> targets;
+
   const std::array<std::pair<int, std::string>, 2> directions{
       {{+1, "forward"}, {-1, "backward"}}};
   for (const auto& [y_offset, name] : directions) {
@@ -45,19 +54,33 @@ ShiftedMetricMap::ShiftedMetricMap(Mesh& m, BoutReal zlength_in, Options* opt)
                           prefix);
     }
 
+    // Where a field line leaves the domain, as on FCI meshes: through the
+    // inner side if the neighbour index is below the interior, else the outer
+    const bool forward = y_offset > 0;
+    auto inner = std::make_shared<BoundaryRegionFCI>(
+        "shiftedmap_" + name, forward ? BNDRY_PAR_FWD_XIN : BNDRY_PAR_BKWD_XIN, y_offset,
+        &mesh);
+    auto outer = std::make_shared<BoundaryRegionFCI>(
+        "shiftedmap_" + name, forward ? BNDRY_PAR_FWD_XOUT : BNDRY_PAR_BKWD_XOUT,
+        y_offset, &mesh);
+
     Slice slice{y_offset, Matrix<int>(mesh.LocalNx, mesh.LocalNy),
                 Tensor<dcomplex>(mesh.LocalNx, mesh.LocalNy, nmodes)};
     BOUT_FOR_SERIAL(i, mesh.getRegion2D("RGN_NOY")) {
       const int x = i.x();
       const int y = i.y();
       const auto gx = static_cast<int>(std::lround(neighbour_x[i]));
-      if (gx < 0) {
-        if (x >= mesh.xstart and x <= mesh.xend) {
-          throw BoutException("shiftedmap: cell ({:d}, {:d}) has no {} neighbour; "
-                              "parallel boundaries are not supported",
-                              x, y, name);
-        }
+      if (gx < interior_begin or gx >= interior_end) {
+        // No neighbour: the slice keeps the cell's own values. In the
+        // interior the field line ends on a target half a cell away, where
+        // parallel boundary conditions set the slice
         slice.source(x, y) = -1;
+        if (x >= mesh.xstart and x <= mesh.xend) {
+          auto& target = (gx < interior_begin) ? inner : outer;
+          for (int z = 0; z < mesh.LocalNz; ++z) {
+            target->add_point(x, y, z, x, y + (0.5 * y_offset), z, 0.5, 1, y_offset);
+          }
+        }
         continue;
       }
       // Global y index with guard cells, as GlobalField3DAccess expects
@@ -75,6 +98,26 @@ ShiftedMetricMap::ShiftedMetricMap(Mesh& m, BoutReal zlength_in, Options* opt)
       }
     }
     slices.push_back(std::move(slice));
+    mesh.addBoundaryPar(inner,
+                        forward ? BoundaryParType::xin_fwd : BoundaryParType::xin_bwd);
+    mesh.addBoundaryPar(outer,
+                        forward ? BoundaryParType::xout_fwd : BoundaryParType::xout_bwd);
+    targets.push_back(inner);
+    targets.push_back(outer);
+  }
+
+  // A cell with targets in both directions has no other point along its
+  // field line for higher-order boundary conditions (as in FCITransform)
+  for (const auto& region : targets) {
+    for (auto& point : *region) {
+      const auto ind = point.ind();
+      for (const auto& other : targets) {
+        if (other->dir() != region->dir()
+            and other->contains(ind.x(), ind.y(), ind.z())) {
+          point.setValid(0);
+        }
+      }
+    }
   }
 }
 
@@ -113,7 +156,8 @@ void ShiftedMetricMap::calcParallelSlices(Field3D& f) {
       BoutReal* out = &f_slice(x, y + slice.y_offset, 0);
       const int source = slice.source(x, y);
       if (source < 0) {
-        // x guard cell without a neighbour: copy the cell's own column
+        // No neighbour: the cell's own column (a target until a parallel
+        // boundary condition sets it, or an x guard cell)
         std::copy_n(&f(x, y, 0), nz, out);
         continue;
       }

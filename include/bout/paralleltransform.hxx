@@ -343,8 +343,12 @@ class GlobalField3DAccess;
  *
  * Grid variables (2D), for `forward` and `backward`:
  *  - pmap_<dir>_x, pmap_<dir>_y: global x index (with guard cells) and y
- *    index (without) of the neighbour; pmap_<dir>_x < 0 where there is none
- *    (only allowed in the x guard cells, whose slices copy the cell);
+ *    index (without) of the neighbour. Where the field line ends on a
+ *    target, pmap_<dir>_x is below the interior (-1) or beyond it (nx), as
+ *    xt_prime on FCI grids: the cell gets a point half a cell away in the
+ *    inner or outer parallel boundary region, where parallel boundary
+ *    conditions set its slice (until then, and in x guard cells without a
+ *    neighbour, the slice holds the cell's own values);
  *  - pmap_<dir>_dzeta: toroidal angle by which the field line advances from
  *    the cell to that neighbour; across a branch cut this includes the
  *    twist-shift angle, so no ShiftAngle is needed.

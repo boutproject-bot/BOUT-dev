@@ -12,6 +12,14 @@
 # and Grad_par must agree to round-off, and the slices must match the field
 # evaluated at the shifted points. The shift, and the twist at the cut,
 # each change the slices by order one.
+#
+# Open field lines: the same cells with targets after the last and before
+# the first y (marked as outer going forward, as inner going backward) and
+# one cell with targets on both sides. A parallel Dirichlet condition of
+# third order sets the slices at the targets; they must match the
+# extrapolation through the boundary value half a cell away, of second
+# order for the cell with two targets, and the target points must be in
+# the expected boundary regions.
 
 import pathlib
 import shutil
@@ -24,6 +32,10 @@ from netCDF4 import Dataset
 NX, NY, NZ = 4, 8, 16
 TOLERANCE = 1e-12
 DY = 2 * np.pi / NY
+TARGET_VALUE = 0.3  # parallel_dirichlet_o3(0.3) in test_shiftedmap.cxx
+TWO_TARGETS = (1, 3)  # (x, y) of the cell with targets on both sides
+COUNTS = ("points_xin_fwd", "points_xin_bwd", "points_xout_fwd", "points_xout_bwd")
+COUNTS += ("ybndry_up", "ybndry_down")
 
 
 def field(x, y, z):
@@ -105,6 +117,15 @@ def make_grids():
         values[f"pmap_{name}_dzeta"] = dzeta[:, None]
     # No branch cut in y here: the twist is part of the map
     write("mapped.nc", NX * NY, 1, values, np.zeros(NX * NY))
+
+    # Open field lines: targets beyond the last and the first y, marked as
+    # outer (nx) going forward and as inner (-1) going backward
+    two_targets = (xs == TWO_TARGETS[0]) & (ys == TWO_TARGETS[1])
+    for name, step, mark in (("forward", 1, NX * NY), ("backward", -1, -1)):
+        ends = (ys + step < 0) | (ys + step >= NY) | two_targets
+        pmap = values[f"pmap_{name}_x"]
+        values[f"pmap_{name}_x"] = np.where(ends[:, None], mark, pmap)
+    write("mapped_open.nc", NX * NY, 1, values, np.zeros(NX * NY))
     return xs, ys
 
 
@@ -117,10 +138,28 @@ def run(name, nproc, args):
     )
     path.joinpath("run.log").write_text(out)
     assert status == 0, out
-    return {
+    result = {
         var: collect(var, path=name, info=False, xguards=False, yguards=False)
         for var in ("f_up", "f_down", "grad_par")
     }
+    return result | {var: int(collect(var, path=name, info=False)) for var in COUNTS}
+
+
+def open_field_lines(closed):
+    """Expected slices on open field lines, from those on closed ones"""
+    ends = {1: J == NY - 1, -1: J == 0}
+    two_targets = (X == TWO_TARGETS[0]) & (J == TWO_TARGETS[1])
+    result = {}
+    for var, other, step in (("f_up", "f_down", 1), ("f_down", "f_up", -1)):
+        # Quadratic through the target value half a cell away, the cell, and
+        # the cell's other neighbour; linear without that neighbour
+        o3 = 8 / 3 * TARGET_VALUE - 2 * F + closed[other] / 3
+        o2 = 2 * TARGET_VALUE - F
+        result[var] = np.where(ends[step][..., None], o3, closed[var])
+        result[var] = np.where(two_targets[..., None], o2, result[var])
+    # The cells next to the cell with two targets still see it
+    result["grad_par"] = (result["f_up"] - result["f_down"]) / (2 * DY)
+    return result
 
 
 def slice_at(step, dzeta):
@@ -155,16 +194,41 @@ def test_shiftedmap():
         if size < 0.1:
             failures.append(f"the {name} is too small to test ({size:.2e})")
 
+    # Target points: none on closed field lines. On open ones NZ per target
+    # cell, forward ones outer and backward ones inner; the default y
+    # boundary iterator visits the outer ones
+    none = dict.fromkeys(COUNTS, 0)
+    targets = (NX + 1) * NZ
+    open_points = none | {"points_xout_fwd": targets, "points_xin_bwd": targets}
+    open_points |= {"ybndry_up": targets}
+    expected_open = open_field_lines(expected)
+    size = np.max(np.abs(expected_open["f_up"] - expected["f_up"]))
+    print(f"the targets change the slices by up to {size:.2f}")
+    if size < 0.1:
+        failures.append(f"the targets are too small to test ({size:.2e})")
+
+    def check_points(label, result, expected_points):
+        points = {var: result[var] for var in COUNTS}
+        if points != expected_points:
+            failures.append(f"{label}: target points {points}, not {expected_points}")
+
+    check_points("ShiftedMetric", structured, none)
     for nproc, args in ((1, "NXPE=1"), (2, "NXPE=2")):
-        mapped = run(
-            f"mapped_np{nproc}",
-            nproc,
-            f"{args} mesh:file=mapped.nc mesh:paralleltransform:type=shiftedmap",
-        )
-        for var in ("f_up", "f_down", "grad_par"):
-            # Back to the structured layout: mapped cell u is structured (xs[u], ys[u])
-            error = np.max(np.abs(mapped[var][:, 0, :] - structured[var][xs, ys]))
-            print(f"{nproc} rank(s): {var} differs from ShiftedMetric by {error:.2e}")
-            if error > TOLERANCE:
-                failures.append(f"{nproc} rank(s): {var} differs by {error:.2e}")
+        for grid, reference, points in (
+            ("mapped", structured, none),
+            ("mapped_open", expected_open, open_points),
+        ):
+            mapped = run(
+                f"{grid}_np{nproc}",
+                nproc,
+                f"{args} mesh:file={grid}.nc mesh:paralleltransform:type=shiftedmap",
+            )
+            label = f"{grid}, {nproc} rank(s)"
+            for var in ("f_up", "f_down", "grad_par"):
+                # Back to the structured layout: mapped cell u is (xs[u], ys[u])
+                error = np.max(np.abs(mapped[var][:, 0, :] - reference[var][xs, ys]))
+                print(f"{label}: {var} differs by {error:.2e}")
+                if error > TOLERANCE:
+                    failures.append(f"{label}: {var} differs by {error:.2e}")
+            check_points(label, mapped, points)
     assert not failures, failures
