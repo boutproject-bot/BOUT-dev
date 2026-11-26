@@ -168,10 +168,12 @@ PetscErrorCode createUnstructuredPattern(Mat& jacobian, Mesh* mesh, Options& opt
         static_cast<PetscInt>(std::count_if(cols, cols + ncols, [&](PetscInt col) {
           return col >= column_start and col < column_end;
         }));
+    // Before MatRestoreRow, which sets ncols to zero
+    const PetscInt other = ncols - local;
     PetscCall(MatRestoreRow(*coupling, row, &ncols, &cols, nullptr));
     for (int i = 0; i < n3d; ++i) {
       d_nnz.push_back(local * n3d);
-      o_nnz.push_back((ncols - local) * n3d);
+      o_nnz.push_back(other * n3d);
     }
   }
 

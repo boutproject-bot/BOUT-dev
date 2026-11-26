@@ -875,7 +875,15 @@ void Solver::outputVars(Options& output_options, bool save_repeat) {
     // Only need to calculate once, but can only be calculated
     // once the solver has been initialised. This outputVars
     // is called once at the start before Solver is initialised.
-    output_options["jacobian_index_base"].force(jacobianIndexBase(), "Solver");
+    // The unknowns of each processor follow those of the processors before
+    // it, so the indices are global also when the mesh is split
+    int local_n = getLocalN();
+    int start = 0;
+    MPI_Exscan(&local_n, &start, 1, MPI_INT, MPI_SUM, BoutComm::get());
+    if (BoutComm::rank() == 0) {
+      start = 0; // MPI_Exscan leaves it undefined there
+    }
+    output_options["jacobian_index_base"].force(jacobianIndexBase(start), "Solver");
   }
 
   // Add 2D and 3D evolving fields to output file

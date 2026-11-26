@@ -5,6 +5,7 @@ bout_add_integrated_test(
   REQUIRES BOUT_HAS_PETSC
   REQUIRES BOUT_USE_METRIC_3D
   REQUIRES zoidberg_unstructured_FOUND
+  PROCESSORS 2
 )
 
 configure_file(../jacobian_tools/read_jacobian.py read_jacobian.py COPYONLY)

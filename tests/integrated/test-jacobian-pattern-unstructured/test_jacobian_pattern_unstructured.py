@@ -12,13 +12,17 @@
 # The perpendicular operator couples most of the cells that the second step
 # adds, so that difference is small (1.7e-5 of the largest entry), but it is
 # far above round-off; with 2 steps the Jacobian is the same to the last bit.
+#
+# Split in y over two processors, the pattern must also hold the couplings
+# to cells on the other processor: the Jacobian, with its rows and columns in
+# the order of the cells and variables, must be the same as on one.
 
 import shutil
 from pathlib import Path
 
 import numpy as np
 from boututils.run_wrapper import build_and_log, launch_safe
-from read_jacobian import load_petsc_matrix
+from read_jacobian import load_jacobian, load_petsc_matrix
 from zoidberg.field import Slab
 from zoidberg.unstructured import UnstructuredPoloidalGrid, make_unstructured_grid
 
@@ -34,15 +38,15 @@ def make_grid(filename):
     )
 
 
-def jacobian(hops):
-    path = Path(f"data_hops{hops}")
+def jacobian(hops, nproc=1, split=""):
+    path = Path(f"data_hops{hops}_np{nproc}")
     shutil.rmtree(path, ignore_errors=True)
     path.mkdir()
     shutil.copy("data/BOUT.inp", path / "BOUT.inp")
     status, out = launch_safe(
-        f"./test_jacobian_pattern_unstructured -d {path} "
-        f"solver:stencil:parallel_hops={hops}",
-        nproc=1,
+        f"./test_jacobian_pattern_unstructured -d {path} {split} "
+        f"solver:stencil:parallel_hops={hops} solver:save_jacobian_index_base=true",
+        nproc=nproc,
         pipe=True,
     )
     (path / "run.log").write_text(out)
@@ -50,8 +54,15 @@ def jacobian(hops):
     # The first Jacobian, at the initial state
     first = min(path.glob("jacobian_*.dat"))
     (nrows, _), (indptr, _, _) = load_petsc_matrix(first, "sparse")
-    print(f"{hops} steps: {indptr[-1] / nrows:.0f} pattern entries per row")
-    return load_petsc_matrix(first)
+    print(
+        f"{hops} steps, {nproc} processor(s): "
+        f"{indptr[-1] / nrows:.0f} pattern entries per row"
+    )
+    # Rows and columns in the order of the cells and variables, which does not
+    # depend on how the mesh is split between processors
+    matrix, _, labels = load_jacobian(path, first)
+    order = np.argsort(labels)
+    return matrix[np.ix_(order, order)]
 
 
 def test_jacobian_pattern_unstructured():
@@ -62,8 +73,16 @@ def test_jacobian_pattern_unstructured():
     scale = np.max(np.abs(reference))
     two_steps = np.max(np.abs(jacobian(2) - reference)) / scale
     one_step = np.max(np.abs(jacobian(1) - reference)) / scale
+    split = jacobian(2, 2, "NYPE=2")
+    two_procs = np.max(np.abs(split - reference)) / scale
     print(
-        f"Largest difference to 6 steps: {two_steps:.1e} (2 steps), {one_step:.1e} (1)"
+        f"Largest difference to 6 steps: {two_steps:.1e} (2 steps), {one_step:.1e} "
+        f"(1), {two_procs:.1e} (2 steps on 2 processors)"
     )
     assert two_steps < 1e-12
     assert one_step > 1e-8
+    # Split over processors, the right-hand side differs at round-off (sums
+    # in another order), which the finite differences magnify (measured 2e-11
+    # of the largest entry); a missing coupling would remove whole entries
+    assert np.array_equal(split != 0, reference != 0)
+    assert two_procs < 1e-9
