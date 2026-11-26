@@ -256,6 +256,11 @@ int main(int argc, char** argv) {
   // Finite volume methods
   fci_op_test("FV_div_par_mod", dump, input, FV::Div_par_mod(input, K, K, flow_ylow));
   fci_op_test("FV_div_par_fvv", dump, input, FV::Div_par_fvv(input, K, K));
+  // With values reconstructed at the cell faces, as on field-aligned grids
+  fci_op_test("FV_div_par_mod_reconstruct", dump, input,
+              FV::Div_par_mod(input, K, K, flow_ylow, true, false, true));
+  fci_op_test("FV_div_par_fvv_reconstruct", dump, input,
+              FV::Div_par_fvv(input, K, K, true, true));
 
   // Support operators (PetscOperators::Parallel, matrices from the grid file)
   if (Options::root()["support_operators"]

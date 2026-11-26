@@ -96,6 +96,9 @@ for name, expr in (
     expr_str = exprToStr(expr.subs({x: xu, z: zu}, simultaneous=True))
     print(f"{name} = {expr_str}")
     options[name] = expr_str
+# Reconstructing the values at the cell faces does not change the operators
+for name in ("FV_div_par_mod", "FV_div_par_fvv"):
+    options[f"{name}_reconstruct_solution"] = f"{name}_solution"
 
 options.write("data/BOUT.inp", overwrite=True)
 
@@ -131,6 +134,8 @@ for name in (
     "laplace_par",
     "FV_div_par_mod",
     "FV_div_par_fvv",
+    "FV_div_par_mod_reconstruct",
+    "FV_div_par_fvv_reconstruct",
     "so_grad_par",
     "so_div_par",
     "so_laplace_par",
@@ -219,6 +224,8 @@ for name in (
     "laplace_par",
     "FV_div_par_mod",
     "FV_div_par_fvv",
+    "FV_div_par_mod_reconstruct",
+    "FV_div_par_fvv_reconstruct",
     "FV_div_a_grad_perp",
     "FV_div_a_grad_perp_upwind",
     "FV_div_a_grad_perp_flowZ",
